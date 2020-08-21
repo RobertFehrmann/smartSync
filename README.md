@@ -68,11 +68,6 @@ All calls to the sp_sync stored procedure have 4 parameters.
     * REFRESH: The REFRESH method creates a secure view abstractions layer pointing to a list of target objects created of referenced by a specific RunID. The RunID (positive number) is provided via the Method Parameter. If the Method Parameter is 0 or negaative, it is interpreted as a relative RunID, i.e. 0=most recent run, -1=previous run, ...). 
     * WORKER_SYNC (INTERNAL ONLY):
     The WORKER_SYNC method is designed as an internal method. It expects several temporary tables to be available and therefor it is not recommended to be called directly.  
-   * SYNC: The SYNC method performs an analysis regarding what objects have changed. To run the actual sync process in parallel, it partitions all tables to be syncd into N groups and then creates a [TASK](https://docs.snowflake.com/en/user-guide/tasks-intro.html) for each partition. Then it waits (synchroniously) for completion of all tasks. After successful completion of all tasks or a failure of at least one task, all tasks will be removed. The degree of parallelizm is set via the Method parameter (see below). In case  To ensure that the target database does not continiously grow, the COMPACT method is called to remove target tables for older runs. The default number of kept runs can be changed in [customizations](#Customizations).
- * COMPACT: The COMPACT method removes all target tables (snapshots) for older synchronization runs. The number of snapshots to keep is provided via the Method Parameter.
- * REFRESH: The REFRESH method creates a secure view abstractions layer pointing to a list of target objects created of referenced by a specific RunID. The RunID (positive number) is provided via the Method Parameter. If the Method Parameter is 0 or negaative, it is interpreted as a relative RunID, i.e. 0=most recent run, -1=previous run, ...). 
- * WORKER_SYNC (INTERNAL ONLY)
-   The WORKER_SYNC method is designed as an internal method. It expects several temporary tables to be available and therefor it is not recommended to be called directly.  
 * Method Parameter
     * Method specific numeric value, i.e. degree of parallelizm, RunIDs to keep, RunID to expose via secure view abstraction layer)
 * Source Database
