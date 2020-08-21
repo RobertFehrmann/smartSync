@@ -31,23 +31,51 @@ SmartSync is a Snowflake Procedures that handles all of the above challenges.
 * Collect metadata information again and compare metadata sets for differences (potential consistency problems)
 * Record metadata information (tables, performed actions, row counts, fingerprints) for auditibility
 
-SmartCopy stores the data for the local copy in a database with the name of the source schema's appended by a date. Source objects are copied to a target object with a sequential number (snapshot number) (6 digit).   
+SmartSync stores the data for the local copy in a database with the name of the source schema's appended by a date. Source objects are copied to a target object with a sequential number (snapshot number) (6 digit). 
+
+The sync step is invoked by calling [sp_sync](#sp_sync) with the sync method. The sync method creates a new set of target tables based on all objects (tables/views) that have changed in the source (shared) database. To ensures that the consumption layer (see [Sharing Step](#Sharing-Step)) is not interrupted during the sync process (which can run for an extended period of time), SmartSync always creates new target tables.  
 
 ### Replication Step
 
-With the ability to create a local copy of a shared dataset, we can replicate the local copy into the VPS deployment via standard Snowflake replication. Details on how to setup replication can be found [here](https://docs.snowflake.com/en/user-guide/database-replication-config.html#). 
+With the ability to create a local copy of a shared dataset, we can replicate the local copy into the VPS deployment via standard Snowflake replication. Setup of replication of the local database is currently not part of smart sync. Details on how to setup replication can be found [here](https://docs.snowflake.com/en/user-guide/database-replication-config.html#). 
 
 ### Sharing Step 
 
-The local copy of the shared dataset can now be shared to consumer account inside the VPS. For that we have to create a set of secure views pointing to the new local copies of the shared dataset. 
+The local copy (or replicated copy) of the shared dataset can now be shared to consumer account inside the VPS. For that we have to create a set of secure views pointing to the new local copies of the shared dataset. Smart sync supports building the secure view abstraction layer through the "REFRESH" method.
 
 ## Implementation Interface
 
-The whole process of 
-1. creating a local copy
-1. sharing the replicated copy inside VPS
+SmartSync is implemented in a single stored procedure that basically acts as a library. SmartSync stores all internal data in a metadata repository, i.e. schema smart_sync_metadata) in the target database. By default all *dates* in SmartSync are UTC. If you like to change the default behavior, please see [customizations](#Customizations).
 
-is supported via a Snowflake stored procedure
+There are to metadata tables:
+* LOG: The log table acts as an execution log. There are 2 log records per call to sp_sync, i.e. a *begin* record and a *end*/*failure* record. A detailed execution log is provided in the *message* attribute.
+*OBJECT_LOG: The ObjectLog provides a detail record for each sync process for each source object (table/secure view). Data in object log is append only, i.e. there are different records for creation and the deletion of objects. 
+Collected metadata includes
+ * Run ID (sequentially increasing number) 
+ * Request metadata (ID and request timestamp)
+ * Action (CREATE/REFERENCE/DROP) (CREATE/DROP correspond to their SQL statement equivalent. REFERENCE indicates that a particular table has not been modified between the current and the previous run. Therefor, no new object has been created but the old object is referenced)
+ * Source object key (schema name, table_name)
+ * Target object location (current and previous schema name and table version)
+ * Source object metadata (commit timestamp, number of rows, table size in bytes (only for tables)) 
+ * Target object metadata (commit timestamp, number of rows, table size in bytes )
+ * Creation Timestamp (this is the completion timestamp of the call since object log data is collected as the last step of the process)
+
+All calls to the sp_sync stored procedure have 4 parameters.
+* Method
+ * SYNC
+   The SYNC method performs an analysis regarding what objects have changed. To run the actual sync process in parallel, it partitions all tables to be syncd into N groups and then creates a [TASK](https://docs.snowflake.com/en/user-guide/tasks-intro.html) for each partition. Then it waits (synchroniously) for completion of all tasks. After successful completion of all tasks or a failure of at least one task, all tasks will be removed. The degree of parallelizm is set via the Method parameter (see below). In case  To ensure that the target database does not continiously grow, the COMPACT method is called to remove target tables for older runs. The default number of kept runs can be changed in [customizations](#Customizations).
+ * COMPACT
+   The COMPACT method removes all target tables (snapshots) for older synchronization runs. The number of snapshots to keep is provided via the Method Parameter.
+ * REFRESH
+   The REFRESH method creates a secure view abstractions layer pointing to a list of target objects created of referenced by a specific RunID. The RunID (positive number) is provided via the Method Parameter. If the Method Parameter is 0 or negaative, it is interpreted as a relative RunID, i.e. 0=most recent run, -1=previous run, ...). 
+ * WORKER_SYNC (INTERNAL ONLY)
+   The WORKER_SYNC method is designed as an internal method. It expects several temporary tables to be available and therefor it is not recommended to be called directly.  
+* Method Parameter
+ * Method specific numeric value, i.e. degree of parallelizm, RunIDs to keep, RunID to expose via secure view abstraction layer)
+* Source Database
+ * For the SYNC Method, the source database is the database created from the shared provided by the data provider. For the REFRESH Method, the source database is the replicated target database (for a remote scenario), or the target database (in case you want to create a sharable abstraction layer in the local environment)
+* Target Database 
+ For the SYNC Method, the target database is the local database where the sync process will create the target tables. For the REFRESH Method, the target database is where the refres process creates the secure view abstraction layer. Source and Target database can be theIn case you want to create the secure view abstraction layer along side with the target tables, 
 
 ### SP_SYNC
 
@@ -59,12 +87,15 @@ This procedure creates a local copy (target database & schema) of all tables/vie
         ,I_SRC_DB VARCHAR
         ,I_TGT_DB VARCHAR
     )
+
+### Customizations
+
     
 
 
 ## Setup
 
-1. Clone the SmartCopy repo (use the command below or any other way to clone the repo)
+1. Clone the SmartSync repo (use the command below or any other way to clone the repo)
     ```
     git clone https://github.com/RobertFehrmann/smartSyncGS.git
     ```   
