@@ -162,8 +162,7 @@ The following steps need to be executed for every database
     create database <source db> from share <provider account>.<source db>;
     grant imported privileges on database <source db> to role smart_sync_rl;
     ```
-1. Set Up delta sync 
-Smart Sync support a delta sync by providing a view that lists all tables to be syncd. If a delta sync table is provided, SmartSync replicates exactly the objects listed in the view. SmartSync will not create a fingerprint for the source tables and therefor processing can be faster in case source tables are very big or the number of changed tables is considerably smaller then the total number of tables.  
+1. (Optional) Smart Sync support a delta sync by providing a view that lists all tables to be syncd. If a delta sync table is provided, SmartSync replicates exactly the objects listed in the view. SmartSync will not create a fingerprint for the source tables and therefor processing can be faster in case source tables are very big or the number of changed tables is considerably smaller then the total number of tables.  
     ```
     use role smart_sync_rl;
     create schema <local db>.SMART_SYNC_METADATA.SMART_SYNC_DELTA_CHANGE;
