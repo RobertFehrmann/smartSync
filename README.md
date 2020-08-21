@@ -121,7 +121,7 @@ There are several customizations you can make by modifying parameters in the sou
     use database smart_sync_db;
     use schema smart_sync_db.metadata;
     ```
-1. Create all procedures from the metadata directory inside the cloned repo by loading each file into a worksheet and then clicking `Run`. Note: if you are getting an error message (SQL compilation error: parse ...), move the cursor to the end of the file, click into the window, and then click `Run` again). Then grant usage permissions on the created stored procs.
+1. Create procedure sp_sync from the metadata directory inside the cloned repo by loading the file into a worksheet and then clicking `Run`. Note: If you are getting an error message (SQL compilation error: parse ...), move the cursor to the end of the file, click into the window, and then click `Run` again). Then grant usage permissions on the created stored procs.
     ```
     use role AccountAdmin;
     grant usage on procedure smart_sync_db.metadata.sp_sync(varchar,float,varchar,varchar) to role smart_sync_rl;
