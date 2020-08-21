@@ -62,6 +62,14 @@ Collected metadata includes
 
 All calls to the sp_sync stored procedure have 4 parameters.
 * Method
+<<<<<<< HEAD
+    * SYNC: The SYNC method performs an analysis regarding what objects have changed. To run the actual sync process in parallel, it partitions all tables to be syncd into N groups and then creates a [TASK](https://docs.snowflake.com/en/user-guide/tasks-intro.html) for each partition. Then it waits (synchroniously) for completion of all tasks. After successful completion of all tasks or a failure of at least one task, all tasks will be removed. The degree of parallelizm is set via the Method parameter (see below). Increase the degree of parallelizm to decrease the runtime but keep in mind that the minimum runtime is determined by the processing time for the single largest table. Increasing the parallelizm beyond that point only creates a long tail and doesn't provide additional benefits.
+    To ensure that the target database does not continiously grow, the COMPACT method is called to remove target tables for older runs. The default number of kept runs can be changed in [customizations](#Customizations).
+    * COMPACT: The COMPACT method removes all target tables (snapshots) for older synchronization runs. The number of snapshots to keep is provided via the Method Parameter.
+    * REFRESH: The REFRESH method creates a secure view abstractions layer pointing to a list of target objects created of referenced by a specific RunID. The RunID (positive number) is provided via the Method Parameter. If the Method Parameter is 0 or negaative, it is interpreted as a relative RunID, i.e. 0=most recent run, -1=previous run, ...). 
+    * WORKER_SYNC (INTERNAL ONLY):
+    The WORKER_SYNC method is designed as an internal method. It expects several temporary tables to be available and therefor it is not recommended to be called directly.  
+=======
    * SYNC
    The SYNC method performs an analysis regarding what objects have changed. To run the actual sync process in parallel, it partitions all tables to be syncd into N groups and then creates a [TASK](https://docs.snowflake.com/en/user-guide/tasks-intro.html) for each partition. Then it waits (synchroniously) for completion of all tasks. After successful completion of all tasks or a failure of at least one task, all tasks will be removed. The degree of parallelizm is set via the Method parameter (see below). In case  To ensure that the target database does not continiously grow, the COMPACT method is called to remove target tables for older runs. The default number of kept runs can be changed in [customizations](#Customizations).
  * COMPACT
@@ -70,16 +78,16 @@ All calls to the sp_sync stored procedure have 4 parameters.
    The REFRESH method creates a secure view abstractions layer pointing to a list of target objects created of referenced by a specific RunID. The RunID (positive number) is provided via the Method Parameter. If the Method Parameter is 0 or negaative, it is interpreted as a relative RunID, i.e. 0=most recent run, -1=previous run, ...). 
  * WORKER_SYNC (INTERNAL ONLY)
    The WORKER_SYNC method is designed as an internal method. It expects several temporary tables to be available and therefor it is not recommended to be called directly.  
+>>>>>>> 12f5c76c617ad3fdb6718cd04217cc9a144f04ab
 * Method Parameter
- * Method specific numeric value, i.e. degree of parallelizm, RunIDs to keep, RunID to expose via secure view abstraction layer)
+    * Method specific numeric value, i.e. degree of parallelizm, RunIDs to keep, RunID to expose via secure view abstraction layer)
 * Source Database
- * For the SYNC Method, the source database is the database created from the shared provided by the data provider. For the REFRESH Method, the source database is the replicated target database (for a remote scenario), or the target database (in case you want to create a sharable abstraction layer in the local environment)
+    * For the SYNC Method, the source database is the database created from the shared provided by the data provider. * * For the REFRESH Method, the source database is the replicated target database (for a remote scenario), or the target database (in case you want to create a sharable abstraction layer in the local environment)
 * Target Database 
- For the SYNC Method, the target database is the local database where the sync process will create the target tables. For the REFRESH Method, the target database is where the refres process creates the secure view abstraction layer. Source and Target database can be theIn case you want to create the secure view abstraction layer along side with the target tables, 
+    * For the SYNC Method, the target database is the local database where the sync process will create the target tables. 
+    * For the REFRESH Method, the target database is where the refres process creates the secure view abstraction layer. Source and Target database can be the same. In that case the secure view abstraction layer is created along side with the target tables. 
 
 ### SP_SYNC
-
-This procedure creates a local copy (target database & schema) of all tables/views inside a shared database (source database and schema). 
     
     create or replace procedure SP_SYNC_GS(
         I_METHOD VARCHAR
@@ -90,14 +98,19 @@ This procedure creates a local copy (target database & schema) of all tables/vie
 
 ### Customizations
 
-    
+There are several customizations you can make by modifying parameters in the source code. Keep in mind that those changes will be overriden in case your deploy again from the github repo.
+
+* timezone='UTC'; All times are adjusted to the same timezone, i.e. UTC. You can change the timezone, i.e. to work in US/Eastern timezone.
+* max_copies=14; This is the maximum number of snapshots kept. Snapshot older than this number will automatically be deleted upon a sync run. You can change this number to keep more snapshots. Keep in mind that every snapshot consumes additional space. 
+* smart_sync_db="SMART_SYNC_DB"; This is the default database name for the code repository. 
+* smart_sync_meta_schema="METADATA"; This is the default schema for the code reposity. 
 
 
 ## Setup
 
 1. Clone the SmartSync repo (use the command below or any other way to clone the repo)
     ```
-    git clone https://github.com/RobertFehrmann/smartSyncGS.git
+    git clone https://github.com/RobertFehrmann/smartSync.git
     ```   
 1. Create database and role to host stored procedures. Both steps require the AccountAdmin role (unless your current role has the necessary permissions.
     ``` 
@@ -109,13 +122,6 @@ This procedure creates a local copy (target database & schema) of all tables/vie
     grant execute task on account to role smart_sync_rl;
     create database smart_sync_db;
     grant usage on database smart_sync_db to role smart_sync_rl;
-    drop warehouse if exists smart_sync_vwh;
-    create warehouse smart_sync_vwh with 
-       WAREHOUSE_SIZE = XSMALL 
-       MAX_CLUSTER_COUNT = 1
-       AUTO_SUSPEND = 1 
-       AUTO_RESUME = TRUE;
-    grant usage,operate,monitor on warehouse smart_sync_vwh to role smart_sync_rl;
     ``` 
 1. Grant smart_sync_role to the appropriate user (login). Replace `<user>` with the user you want to use for smart_copy. Generally speaking, this should be the user you are connected with right now. Note that you also could use the AccountAdmin role for all subsequent steps. That could be appropriate on a test or eval system but not for a production setup.
     ```
@@ -136,6 +142,18 @@ This procedure creates a local copy (target database & schema) of all tables/vie
 
 The following steps need to be executed for every database 
 
+1. Though it's not required, it is recommended to run every sync setup(database) with it's own dedicted warehouse. Set MAX_CLUSTER_COUNT to the appropriate value based on the size of the biggest object, number of objects and desired runtime SLA. For instance, you can expect to run 2 degrees of parallelizm per cluster. To avoid a long tail problem, i.e. the minimum run time is determined by the largest object (table/view), do not increase the degree of parallelizm when the worker processes with only one object to process
+    ```
+    drop warehouse if exists smart_sync_<warehouse>;
+    create warehouse smart_sync_<warehouse> with 
+       WAREHOUSE_SIZE = XSMALL 
+       MAX_CLUSTER_COUNT = <X>
+       SCALING POLICY = STANDARD
+       AUTO_SUSPEND = 15 
+       AUTO_RESUME = TRUE
+       MAX_CONCURRENCY_LEVEL=4;
+    grant usage,operate,monitor on warehouse smart_sync_vwh to role smart_sync_rl;
+    ```
 1. Create the target (local) database, grant the necessary permission the role smart_sync_rl
     ```
     use role AccountAdmin;
@@ -150,12 +168,12 @@ The following steps need to be executed for every database
     create database <source db> from share <provider account>.<source db>;
     grant imported privileges on database <source db> to role smart_sync_rl;
     ```
-1. Set Up Notifications View to notification table. 
+1. Set Up delta sync  
     ```
     use role smart_sync_rl;
-    create schema <local db>.INTERNAL_<schema_name>_NOTIFICATIONS;
-    create view <local db>.INTERNAL_<schema_name>_NOTIFICATIONS."--CRUX_NOTIFICATIONS--" 
-       as select * from <fully qualitied crux notification table>;
+    create schema <local db>.SMART_SYNC_METADATA.SMART_SYNC_DELTA_CHANGE;
+    create view <local db>.SMART_SYNC_METADATA.SMART_SYNC_DELTA_CHANGE
+       as select * ...
     ```
 1. Run the sync command 
     ```
@@ -167,6 +185,3 @@ The following steps need to be executed for every database
     use role smart_sync_rl;
     call smart_sync_db.metadata.sp_refresh_gs(<local db>,<new shared db>,<schema>,<new share>);
     ```
-
-
-
