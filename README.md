@@ -162,7 +162,7 @@ The following steps need to be executed for every database
     create database <source db> from share <provider account>.<source db>;
     grant imported privileges on database <source db> to role smart_sync_rl;
     ```
-1. (Optional) Smart Sync support a delta sync by providing a view that lists all tables to be syncd. If a delta sync table is provided, SmartSync replicates exactly the objects listed in the view. SmartSync will not create a fingerprint for the source tables and therefor processing can be faster in case source tables are very big or the number of changed tables is considerably smaller then the total number of tables.  
+1. (Optional) Smart Sync supports a delta sync concept by providing a view that lists all tables to be syncd. If a delta sync table is provided, SmartSync syncs exactly the objects listed in the view. SmartSync will not create a fingerprint for the source tables and therefor processing can be faster in case source tables are very big or the number of changed tables is considerably smaller then the total number of tables.  
     ```
     use role smart_sync_rl;
     create schema <local db>.SMART_SYNC_METADATA.SMART_SYNC_DELTA_CHANGE;
@@ -172,10 +172,10 @@ The following steps need to be executed for every database
 1. Run the sync command 
     ```
     use role smart_sync_rl;
-    call smart_sync_db.metadata.sp_sync_gs(<shared db>,<local db>,<schema>);
+    call smart_sync_db.metadata.sp_sync('SYNC',<degree of parallelizm>,<shared db>,<local db>);
     ```
 1. Run the refresh command
     ```
     use role smart_sync_rl;
-    call smart_sync_db.metadata.sp_refresh_gs(<local db>,<new shared db>,<schema>,<new share>);
+    call smart_sync_db.metadata.sp_sync('REFRESH',0,<local db>,<target db>);
     ```
