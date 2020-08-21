@@ -62,7 +62,7 @@ Collected metadata includes
 
 All calls to the sp_sync stored procedure have 4 parameters.
 * Method
- * SYNC
+   * SYNC
    The SYNC method performs an analysis regarding what objects have changed. To run the actual sync process in parallel, it partitions all tables to be syncd into N groups and then creates a [TASK](https://docs.snowflake.com/en/user-guide/tasks-intro.html) for each partition. Then it waits (synchroniously) for completion of all tasks. After successful completion of all tasks or a failure of at least one task, all tasks will be removed. The degree of parallelizm is set via the Method parameter (see below). In case  To ensure that the target database does not continiously grow, the COMPACT method is called to remove target tables for older runs. The default number of kept runs can be changed in [customizations](#Customizations).
  * COMPACT
    The COMPACT method removes all target tables (snapshots) for older synchronization runs. The number of snapshots to keep is provided via the Method Parameter.
