@@ -77,6 +77,7 @@ const task_partitioned_set = "TASK_PARTITIONED_SET"
 const object_sync_request = "OBJECT_SYNC_REQUEST";
 const object_sync_task = "OBJECT_SYNC_TASK";
 const object_sync_result = "OBJECT_SYNC_RESULT";
+const metadata_out = "METADATA_OUT";
 const object_drop_request = "OBJECT_DROP_REQUEST";
 const smart_sync_delta_change = "SMART_SYNC_DELTA_CHANGE";
 const object_snapshot_meta_data = "OBJECT_SNAPSHOT_META_DATA";
@@ -200,62 +201,59 @@ function flush_log (status){
 // Copyright (c) 2020 Snowflake Inc. All rights reserved
 // -----------------------------------------------------------------------------
 
-function get_target_metadata(){
+function get_metadata(metadata_db){
 
    var sqlquery="";
    var schema_name="";
    var counter=0;
 
-   log("GET TARGET METADATA ");
+   log("GET METADATA FOR "+metadata_db);
 
    sqlquery=`
       CREATE OR REPLACE
-      TABLE "` + tgt_db + `"."` + scheduler_tmp + `"."` + object_sync_result  + `" (
-         object_schema varchar
-         ,object_name varchar
+      TABLE "` + tgt_db + `"."` + scheduler_tmp + `"."` + metadata_out  + `" (
+         table_type varchar
+         ,table_catalog varchar
+         ,table_schema varchar
+         ,table_name varchar
          ,bytes number
          ,row_count number
-         ,last_commit_ts timestamp_tz(9)
+         ,last_altered timestamp_tz(9)
       )`;
    snowflake.execute({sqlText: sqlquery});
 
    try {
       sqlquery=`
          INSERT 
-         INTO "` + tgt_db + `"."` + scheduler_tmp + `"."` + object_sync_result  + `"
-            SELECT o.object_schema,o.object_name
-                   ,t.bytes, t.row_count, convert_timezone('`+timezone+`',last_altered) last_commit_ts
-            FROM "` + tgt_db + `".` + scheduler_tmp + `.` + object_sync_task + ` o
-            INNER JOIN "`+tgt_db+`".information_schema.tables t
-               ON t.table_catalog='`+tgt_db+`' AND t.table_schema=o.next_schema_name 
-                  AND t.table_name=o.object_name||'_'||o.next_table_version
+         INTO "` + tgt_db + `"."` + scheduler_tmp + `"."` + metadata_out  + `"
+            SELECT table_type, table_catalog, table_schema, table_name 
+                   ,bytes, row_count, last_altered
+            FROM  "`+metadata_db+`".information_schema.tables 
+            WHERE table_catalog='`+metadata_db+`'
             `;
       snowflake.execute({sqlText:  sqlquery});
 
    }
    catch(err) {
       sqlquery=`
-         SELECT distinct next_schema_name
-         FROM "` + tgt_db + `".` + scheduler_tmp + `.` + object_sync_task + ` o
+         SELECT table_schema
+         FROM "`+metadata_db+`".information_schema.tables 
       `;
 
       var ResultSet = (snowflake.createStatement({sqlText:sqlquery})).execute();
 
       while (ResultSet.next() && counter < max_number_schemas ) {
          counter+=1;
-         var next_schema_name=ResultSet.getColumnValue(1);
-         log("   GET TARGET METADATA FOR: "+schema_name)
+         schema_name=ResultSet.getColumnValue(1);
+         log("   GET METADATA FOR: "+schema_name)
 
          sqlquery=`
-         INSERT 
-         INTO "` + tgt_db + `"."` + scheduler_tmp + `"."` + object_sync_result  + `"
-            SELECT o.object_schema,o.object_name
-                   ,t.bytes, t.row_count,convert_timezone('`+timezone+`',last_altered) last_altered
-            FROM "` + tgt_db + `".` + scheduler_tmp + `.` + object_sync_task + ` o
-            INNER JOIN "`+tgt_db+`".information_schema.tables t
-               ON t.table_catalog='`+tgt_db+`' AND t.table_schema=o.next_schema_name 
-                  AND t.table_name=o.object_name||'_'||o.next_table_version
-            WHERE o.object_schema ='`+schema_name+`'
+            INSERT 
+            INTO "` + tgt_db + `"."` + scheduler_tmp + `"."` + metadata_out  + `"
+               SELECT table_type, table_catalog, table_schema, table_name 
+                     ,bytes, row_count, last_altered
+               FROM "`+metadata_db+`".information_schema.tables 
+               WHERE table_catalog='`+metadata_db+`' AND  table_schema ='`+schema_name+`'
                `;
          snowflake.execute({sqlText:  sqlquery});
       }
@@ -292,7 +290,8 @@ function process_tasks(partition_id) {
    // split the work into sets of "task_partition_size" chunks
    sqlquery=`
       INSERT INTO "` + tgt_db + `".` + scheduler_tmp + `.` + task_partitioned_set + ` 
-         SELECT partition_id, trunc(seq4()/`+task_partition_set_size+`) set_id,check_fingerprint,'`+src_db+`' database_name, object_schema, object_name
+         SELECT partition_id, trunc(seq4()/`+task_partition_set_size+`) set_id,check_fingerprint,'`+src_db+`' database_name
+                , object_schema, object_name
                 , null::varchar, null::varchar, null varchar
          FROM  "` + tgt_db + `".` + scheduler_tmp + `.` + task_partitioned + `
          WHERE partition_id = `+partition_id+` 
@@ -315,12 +314,22 @@ function process_tasks(partition_id) {
       var set_id=ResultSet.getColumnValue(1);
       var object_schema=ResultSet.getColumnValue(2)
 
+      // the call to information_schema in the following statement may fail while Snowflake still has a limitation
+      // on how many rows this call can return. While this is still the case, we will take attributes row_count, bytes
+      // from table task_partitioned. The drawback from this approach is, that the fingerprint is no longer computes in
+      // the same transaction as row_count, bytes. In case the table content has changed since the row_count, bytes have 
+      // been computed, the fingerprint would show a different value, while row_count, bytes still show the old value
+      // (which might be confusing).     
+
       sqlquery=`
          SELECT 'INSERT INTO "` + tgt_db + `".` + scheduler_tmp + `.` + object_snapshot_meta_data + ` 
-            SELECT partition_id, database_name, s.table_schema, s.table_name, fingerprint'||
-                   ',convert_timezone(\\'`+timezone+`\\',last_altered) last_altered, bytes, row_count FROM (\n'||
-                   listagg(stmt,' union \n')||'\n) s INNER JOIN "`+src_db+`".information_schema.tables  i '||
-                   ' on i.table_catalog=\\'`+src_db+`\\' and i.table_schema=s.table_schema and i.table_name = s.table_name ' 
+            SELECT s.partition_id, s.database_name, s.table_schema, s.table_name, s.fingerprint'||
+                   ',convert_timezone(\\'`+timezone+`\\',i.last_altered) last_altered
+                   , i.bytes, i.row_count FROM (\n'|| listagg(stmt,' union \n')||'\n) s ` +
+                   // INNER JOIN "`+src_db+`".information_schema.tables  i '||
+                   //' on i.table_catalog=\\'`+src_db+`\\' and i.table_schema=s.table_schema and i.table_name = s.table_name ' 
+                   ` INNER JOIN "`+tgt_db+`".` + scheduler_tmp + `.` + task_partitioned + `  i '||
+                   ' on i.object_schema=s.table_schema and i.object_name = s.table_name ' 
             FROM   (
                SELECT '( SELECT `+partition_id+` partition_id,\\'`+src_db+`\\' database_name'||
                               ', \\''||object_schema||'\\' table_schema,\\''||object_name||'\\' table_name'||
@@ -330,7 +339,7 @@ function process_tasks(partition_id) {
                FROM  "` + tgt_db + `".` + scheduler_tmp + `.` + task_partitioned_set + ` 
                WHERE partition_id = `+partition_id+` AND set_id = `+set_id+` 
                   AND object_schema = '`+object_schema+`' and database_name = '`+src_db+`'
-               ORDER BY object_schema, object_name )
+               ORDER BY object_schema, object_name ) 
             ;`
 
       var ResultSet2 = (snowflake.createStatement({sqlText:sqlquery})).execute();
@@ -488,7 +497,19 @@ function record_work() {
 
    log("RECORD WORK")
 
-   get_target_metadata();
+   get_metadata(tgt_db);
+
+   sqlquery=`
+      CREATE OR REPLACE TABLE  "` + tgt_db + `"."` + scheduler_tmp + `"."` + object_sync_result  + `" 
+         AS 
+            SELECT o.object_schema,o.object_name
+                  ,t.bytes, t.row_count, convert_timezone('`+timezone+`',t.last_altered) last_commit_ts
+            FROM "` + tgt_db + `".` + scheduler_tmp + `.` + object_sync_task + ` o
+            INNER JOIN "` + tgt_db + `".` + scheduler_tmp + `.` + metadata_out + ` t
+               ON t.table_catalog='`+tgt_db+`' AND t.table_schema=o.next_schema_name 
+                  AND t.table_name=o.object_name||'_'||o.next_table_version
+         `;
+   snowflake.execute({sqlText:  sqlquery});
 
    sqlquery=`
       SELECT COUNT(*)
@@ -594,17 +615,14 @@ function create_task_list() {
                      FROM "` + tgt_db + `".` + meta_schema + `.` + local_object_log +`
                   )
                SELECT null::varchar object_type, '`+string_no+`'::varchar check_fingerprint, c.object_schema, c.object_name
-                      , c.bytes,c.request_id, c.request_ts
+                     , c.bytes, c.request_id, c.request_ts
                FROM  "` + tgt_db + `".` + meta_schema + `.` + smart_sync_delta_change +` c
                      , most_recent_sync_object 
                WHERE request_ts > nvl(last_altered,'2000-01-01'::timestamp_tz)
-                  AND NOT EXISTS (
-                     SELECT 1
-                     FROM "` + tgt_db + `".` + meta_schema + `.` + local_object_log + ` l
-                     WHERE  l.table_schema = c.object_schema
-                        AND l.table_name = c.object_schema
-                        AND l.request_id = c.request_id
-      )
+                  AND request_id NOT IN  (
+                     SELECT request_id
+                     FROM "` + tgt_db + `".` + meta_schema + `.` + local_object_log + ` l 
+                  )
       `;
 
       var ResultSet = (snowflake.createStatement({sqlText:sqlquery})).execute();
@@ -626,21 +644,24 @@ function create_task_list() {
 
    log("CREATE TASK FOR REQUESTED OBJECTS");
 
+   get_metadata(src_db);
+
    sqlquery=`
       CREATE OR REPLACE TABLE "` + tgt_db + `".` + scheduler_tmp + `.` + object_sync_task + `
          AS WITH
               source_objects 
                   AS (
                      SELECT table_type object_type, table_schema object_schema, table_name object_name, bytes
-                     FROM "` + src_db + `".INFORMATION_SCHEMA.TABLES
+                            , row_count,last_altered
+                     FROM "` + tgt_db + `".` + scheduler_tmp + `.` + metadata_out + ` t
                      WHERE table_catalog='`+src_db+`' AND table_schema != 'INFORMATION_SCHEMA' 
                   ),
                target_objects
                   AS (
-                     SELECT table_schema object_schema,table_name object_name,target_bytes bytes
+                     SELECT table_schema object_schema,table_name object_name,target_bytes bytes, target_row_count row_count
                               ,prev_schema_name, prev_table_version, curr_schema_name, curr_table_version
                      FROM ( 
-                           SELECT table_schema,table_name,target_bytes
+                           SELECT table_schema,table_name,target_bytes, target_row_count
                                     ,prev_schema_name, prev_table_version, curr_schema_name, curr_table_version
                                     ,row_number() OVER (PARTITION BY table_schema, table_name ORDER BY curr_table_version desc) id
                            FROM "` + tgt_db + `".` + meta_schema + `.` + local_object_log + ` 
@@ -650,6 +671,8 @@ function create_task_list() {
                SELECT s.object_type, r.check_fingerprint, r.object_schema, r.object_name, curr_schema_name
                         , curr_table_version, r.object_schema||'_'|| to_varchar(request_ts,'YYYY_MM_DD') next_schema_name
                         , lpad((nvl(curr_table_version,'000000')::int+1),6,'0')::varchar next_table_version
+                        , s.row_count row_count
+                        , s.last_altered last_altered
                         , nvl(r.bytes,t.bytes) bytes
                         , r.request_id, r.request_ts
                FROM "` + tgt_db + `".` + scheduler_tmp + `.` + object_sync_request + ` r
