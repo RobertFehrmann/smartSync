@@ -82,6 +82,7 @@ const object_drop_request = "OBJECT_DROP_REQUEST";
 const smart_sync_delta_change = "SMART_SYNC_DELTA_CHANGE";
 const object_snapshot_meta_data = "OBJECT_SNAPSHOT_META_DATA";
 const task_name_worker_sync = tgt_db + "_WORKER_SYNC";
+const task_name_worker_refresh = tgt_db + "_WORKER_REFRESH";
 const local_object_log = "OBJECT_LOG";
 const local_log="LOG"
 const remote="REMOTE"
@@ -98,13 +99,16 @@ const wait_to_poll=30;
 const max_worker_wait_loop = worker_timeout/60/1000/(wait_to_poll/60);
 const min_jobs_per_cluster = 16;
 const task_partition_set_size=16;
-const max_partition=16;
+const max_partition=32;
+const refresh_cluster_count=24;
+const refresh_min_jobs_per_cluster=64;
 
 // internal enum constants
 const method_sync='SYNC';
 const method_worker_sync='WORKER_SYNC';
 const method_compact='COMPACT';
 const method_refresh='REFRESH'
+const method_worker_refresh='WORKER_REFRESH';
 const action_create='CREATE';
 const action_reference='REFERENCE';
 const action_drop='DROP';
@@ -236,8 +240,8 @@ function get_metadata(metadata_db){
    }
    catch(err) {
       sqlquery=`
-         SELECT table_schema
-         FROM "`+metadata_db+`".information_schema.tables 
+         SELECT schema_name
+         FROM "`+metadata_db+`".information_schema.schemata 
       `;
 
       var ResultSet = (snowflake.createStatement({sqlText:sqlquery})).execute();
@@ -273,7 +277,7 @@ function get_metadata(metadata_db){
 // Copyright (c) 2020 Snowflake Inc. All rights reserved
 // -----------------------------------------------------------------------------
 
-function process_tasks(partition_id) {
+function process_sync_tasks(partition_id) {
    var counter=0;
    var prev_schema="";
    var table_name="";
@@ -479,6 +483,90 @@ function process_tasks(partition_id) {
    }
 }
 
+// -----------------------------------------------------------------------------
+// Author      Robert Fehrmann
+// Created     2020-08-01
+// Purpose     This function is the main function to process the work for the worker process
+//             Instead of running the metadata collection individually per object, it collects 
+//             the metadata information in sets to increase performance. Then it determines 
+//             what objects actually have to be copied by filtering objects that have the same
+//             fingerprint as the source object. All remaining objects will be copied into a 
+//             new snapshot table using a CTAS statement. Then it collects the metadata information
+//             for the new target objects using the same method as above.
+// Copyright (c) 2020 Snowflake Inc. All rights reserved
+// -----------------------------------------------------------------------------
+
+function process_refresh_tasks(partition_id) {
+   var counter=0;
+   var prev_schema="";
+   var table_name="";
+   var table_schema="";
+   var delivery_id="";
+   var curr_schema_name="";
+   var curr_table_version="";
+   var next_schema_name="";
+   var next_table_version="";
+   var sqlquery="";
+
+   log("GET TASK LIST")
+
+   sqlquery=`
+      SELECT object_schema table_schema,object_name table_name,curr_schema_name, curr_table_name
+      FROM  "` + tgt_db + `".` + refresh_tmp + `.` + task_partitioned + `
+      WHERE partition_id = `+partition_id+`
+      ORDER BY table_schema,table_name
+   `;
+   var ResultSet = (snowflake.createStatement({sqlText:sqlquery})).execute();
+
+   counter=0;
+   while (ResultSet.next()) {
+      counter = counter + 1;
+      table_schema=ResultSet.getColumnValue(1);
+      table_name = ResultSet.getColumnValue(2);
+      curr_schema_name = ResultSet.getColumnValue(3);
+      curr_table_name = ResultSet.getColumnValue(4);
+      table_schema_new=internal+"_"+table_schema
+
+      if (table_schema_new != prev_schema) {
+         log("CREATE SCHEMA: "+table_schema_new);
+         prev_schema=table_schema_new;
+
+         sqlquery=`
+            CREATE SCHEMA IF NOT EXISTS "` + tgt_db + `"."` + table_schema + `"
+         `;
+         snowflake.execute({sqlText:  sqlquery});
+
+         sqlquery = `
+            GRANT USAGE ON SCHEMA "` + tgt_db + `"."` + table_schema + `" TO SHARE "` + tgt_share + `"`;
+         snowflake.execute({sqlText: sqlquery});
+
+         sqlquery=`
+            CREATE SCHEMA IF NOT EXISTS "` + tgt_db + `"."` + table_schema_new + `"
+         `;
+         snowflake.execute({sqlText:  sqlquery});
+
+         sqlquery = `
+            GRANT USAGE ON SCHEMA "` + tgt_db + `"."` + table_schema_new + `" TO SHARE "` + tgt_share + `"`;
+         snowflake.execute({sqlText: sqlquery});
+      }
+
+      log("  CREATE SECURE VIEW: "+table_schema_new+"."+table_name+" FOR "+curr_schema_name+"."+curr_table_name);
+
+      sqlquery = `
+         CREATE OR REPLACE /* # ` + counter + ` */ SECURE VIEW "` + tgt_db + `"."` + table_schema_new + `"."` + table_name + `" AS
+               SELECT * FROM "` + src_db + `"."` + curr_schema_name + `"."` + curr_table_name + `"`;
+      snowflake.execute({sqlText: sqlquery});
+
+      sqlquery = `
+         GRANT SELECT ON /* # ` + counter + ` */ VIEW "` + tgt_db + `"."` + table_schema_new + `"."` + table_name + `" TO SHARE "` + tgt_share + `"`;
+      snowflake.execute({sqlText: sqlquery});
+   }
+
+   if (counter==0){
+      throw new Error("REQUESTED RUN ID NOT FOUND: "+requested_run_id)
+   }
+
+}
 
 // -----------------------------------------------------------------------------
 // Author      Robert Fehrmann
@@ -592,7 +680,7 @@ function record_work() {
 // Copyright (c) 2020 Snowflake Inc. All rights reserved
 // -----------------------------------------------------------------------------
 
-function create_task_list() {
+function create_sync_task_list() {
    var sqlquery="";
 
    sqlquery=`
@@ -709,12 +797,25 @@ function create_task_list() {
 // Copyright (c) 2020 Snowflake Inc. All rights reserved
 // -----------------------------------------------------------------------------
 
-function drop_all_workers () {
+function drop_all_workers (process) {
+
+   var process_tmp="";
+   var task_name_worker="";
+
+   if (process==method_sync){
+      process_tmp=scheduler_tmp;
+      task_name_worker=task_name_worker_sync;
+   } else if (process==method_refresh) {
+      process_tmp=refresh_tmp;
+      task_name_worker=task_name_worker_refresh;
+   } else {
+      throw new Error ("METHOD NOT FOUND: "+process)
+   }
 
    log("DROP ALL WORKERS");
    var sqlquery=`
       SELECT partition_id
-      FROM   "` + tgt_db + `".` + scheduler_tmp + `.` + table_scheduler+ ` 
+      FROM   "` + tgt_db + `".` + process_tmp + `.` + table_scheduler+ ` 
       ORDER BY 1
    `;
 
@@ -723,7 +824,7 @@ function drop_all_workers () {
    while (ResultSet.next()) {
       var partition_id_tmp=ResultSet.getColumnValue(1); 
       sqlquery=`
-         DROP TASK "` + tgt_db + `".` + scheduler_tmp + `."` + task_name_worker_sync + `_` + partition_id_tmp + `"
+         DROP TASK "` + tgt_db + `".` + process_tmp + `."` + task_name_worker + `_` + partition_id_tmp + `"
       `;
       snowflake.execute({sqlText:  sqlquery});
    }
@@ -747,10 +848,26 @@ function drop_all_workers () {
 // Copyright (c) 2020 Snowflake Inc. All rights reserved
 // -----------------------------------------------------------------------------
 
-function wait_for_worker_completion() {
+function wait_for_worker_completion(process) {
+
+   var process_tmp="";
+   var task_name_worker="";
+   var method_worker="";
+
+   if (process==method_sync){
+      process_tmp=scheduler_tmp;
+      task_name_worker=task_name_worker_sync;
+      method_worker=method_worker_sync;
+   } else if (process==method_refresh){
+      process_tmp=refresh_tmp
+      task_name_worker=task_name_worker_refresh;
+      method_worker=method_worker_refresh;
+   } else {
+      throw new error ("PROCESS NOT FOUND: "+process)
+   }
 
    sqlquery=`
-      CREATE OR REPLACE TABLE "` + tgt_db + `"."` + scheduler_tmp + `"."` + table_scheduler+ `" (
+      CREATE OR REPLACE TABLE "` + tgt_db + `"."` + process_tmp + `"."` + table_scheduler+ `" (
          scheduler_session_id bigint
          ,partition_id integer
          ,task_count integer
@@ -760,10 +877,10 @@ function wait_for_worker_completion() {
    snowflake.execute({sqlText:  sqlquery});
 
    sqlquery=`
-      INSERT INTO "` + tgt_db + `"."` + scheduler_tmp + `"."` + table_scheduler+ `" 
+      INSERT INTO "` + tgt_db + `"."` + process_tmp + `"."` + table_scheduler+ `" 
                   (scheduler_session_id,partition_id,task_count)
          SELECT current_session(),partition_id,count(1)
-         FROM "` + tgt_db + `"."` + scheduler_tmp + `".` + task_partitioned + `
+         FROM "` + tgt_db + `"."` + process_tmp + `".` + task_partitioned + `
          GROUP BY 1,2
    `;
    snowflake.execute({sqlText:  sqlquery});
@@ -771,7 +888,7 @@ function wait_for_worker_completion() {
    // create one task per configured number of clusters
    sqlquery=`
       SELECT partition_id
-      FROM   "` + tgt_db + `"."` + scheduler_tmp + `"."` + table_scheduler+ `" 
+      FROM   "` + tgt_db + `"."` + process_tmp + `"."` + table_scheduler+ `" 
       ORDER BY 1
    `;
 
@@ -780,16 +897,16 @@ function wait_for_worker_completion() {
    while (ResultSet.next()) {
       var partition_id_tmp=ResultSet.getColumnValue(1); 
       sqlquery=`
-         CREATE OR REPLACE TASK "` + tgt_db + `".` + scheduler_tmp + `."` + task_name_worker_sync + `_` + partition_id_tmp +`"
+         CREATE OR REPLACE TASK "` + tgt_db + `".` + process_tmp + `."` + task_name_worker + `_` + partition_id_tmp +`"
             WAREHOUSE =  `+current_warehouse+`
             SCHEDULE= '1 MINUTE' 
             USER_TASK_TIMEOUT_MS=`+worker_timeout+` 
-         AS call "`+smart_sync_db+`".`+smart_sync_meta_schema+`.`+this_name+`('`+method_worker_sync+`',`+partition_id_tmp+`,'`+src_db+`','`+tgt_db+`')
+         AS call "`+smart_sync_db+`".`+smart_sync_meta_schema+`.`+this_name+`('`+method_worker+`',`+partition_id_tmp+`,'`+src_db+`','`+tgt_db+`')
       `;
       snowflake.execute({sqlText:  sqlquery});
       
       sqlquery=`
-         ALTER TASK "` + tgt_db + `".` + scheduler_tmp + `."` + task_name_worker_sync + `_` + partition_id_tmp + `" resume
+         ALTER TASK "` + tgt_db + `".` + process_tmp + `."` + task_name_worker + `_` + partition_id_tmp + `" resume
       `;
       snowflake.execute({sqlText:  sqlquery});
    }
@@ -802,12 +919,12 @@ function wait_for_worker_completion() {
                   ,row_number() OVER (PARTITION BY scheduler_session_id,partition_id ORDER BY create_ts desc) id
             FROM "` + tgt_db + `"."` + meta_schema + `".` +local_log + `
             WHERE status in ('`+status_begin+`','`+status_end+`','`+status_failure+`')
-               AND method = '`+method_worker_sync+`'
+               AND method = '`+method_worker+`'
             )
          WHERE id=1
       )
       SELECT s.partition_id, nvl(l.session_id,0) worker_session_id, nvl(l.status,'`+status_wait+`')
-      FROM  "` + tgt_db + `"."` + scheduler_tmp + `"."` + table_scheduler+ `"  s
+      FROM  "` + tgt_db + `"."` + process_tmp + `"."` + table_scheduler+ `"  s
          LEFT OUTER JOIN worker_log l
             ON l.scheduler_session_id = s.scheduler_session_id 
                AND l.partition_id=s.partition_id
@@ -826,7 +943,7 @@ function wait_for_worker_completion() {
          worker_status=    ResultSet.getColumnValue(3);
          if (worker_status==status_failure) {
             log("   WORKER "+partition_id_tmp+" FAILED" );
-            drop_all_workers();
+            drop_all_workers(process);
             throw new Error("WORKER FAILED") 
          } else if (worker_session_id == 0) {            
             counter+=1;
@@ -839,14 +956,14 @@ function wait_for_worker_completion() {
                log("   WORKER FOR PARTITION "+partition_id_tmp+" COMPLETED");
             } else {
                log("UNKNOWN WORKER STATUS "+worker_status)
-               drop_all_workers();
+               drop_all_workers(process);
                throw new Error("UNKNOWN WORKER STATUS "+worker_status+"; ABORT")
             }
          }
       }
       if (counter<=0)  {
          log("ALL WORKERS COMPLETED SUCCESSFULLY");
-         drop_all_workers();
+         drop_all_workers(process);
          break;
       } else {
          if (loop_counter<max_worker_wait_loop) {
@@ -854,12 +971,11 @@ function wait_for_worker_completion() {
             log("   WAITING FOR "+counter+" WORKERS TO COMPLETE; LOOP CNT "+loop_counter);
             snowflake.execute({sqlText: "call /* "+loop_counter+" */ system$wait("+wait_to_poll+")"});
          } else {
-            drop_all_workers();
+            drop_all_workers(process);
             throw new Error("MAX WAIT REACHED; ABORT");
          }
       }                   
    } 
-
 }
 
 // -----------------------------------------------------------------------------
@@ -1059,7 +1175,7 @@ function scheduler ()
    `;
    snowflake.execute({sqlText: sqlquery});
 
-   create_task_list();
+   create_sync_task_list();
 
    sqlquery=`
       SELECT count(1)
@@ -1077,12 +1193,11 @@ function scheduler ()
          log("NOTHING TO DO")
       } else if (partition_count == 1) {
          log("PROCESSING TASKS FOR PARTITION 1");
-
-         process_tasks(1);
+         process_sync_tasks(1);
          record_work();
          compact(max_copies)
       } else if (partition_count <= max_partition) {
-         wait_for_worker_completion();
+         wait_for_worker_completion(method_sync);
          record_work();
          compact(max_copies)
       } else {
@@ -1091,6 +1206,105 @@ function scheduler ()
    } else {
       throw new Error("TASK TABLE NOT FOUND")
    }
+}
+
+// -----------------------------------------------------------------------------
+// Author      Robert Fehrmann
+// Created     2020-09-18
+// Purpose     This function determines what needs to be done. The list of objects
+//             to be syncd is either coming from the source database information schema
+//             or it can be provides via a view called SMART_SYNC_DELTA_CHANGE. If the 
+//             view does not exist it is assumed that all objects have to be syncd, i.e.
+//             it is no necessary to collect fingerprint information. The total list
+//             is then filtered by the last_altered data of the source objects. Only objects
+//             that have been altered since the last run will be syncd. The resulting list
+//             will be partitioned into groups of equal work.
+// Copyright (c) 2020 Snowflake Inc. All rights reserved
+// -----------------------------------------------------------------------------
+function create_refresh_task_list () {
+
+   log("CREATE REFRESH TASK LIST")
+
+   if (requested_refresh_id > 0){
+      var requested_run_id=requested_refresh_id;
+      log("REQUESTED RUN_ID: "+requested_refresh_id)
+
+   } else {
+
+      log("FIND RUN_ID FOR RELATIVE REFRESH SET: "+requested_refresh_id)
+
+      var sqlquery=`
+         SELECT -seq4() id,run_id, to_varchar(min(target_commit_ts),'YYYY-MM-DD HH24:MI:SS')
+                , to_varchar(max(target_commit_ts),'YYYY-MM-DD HH24:MI:SS')
+         FROM "`+src_db+`".`+meta_schema+`.`+local_object_log+` l1
+         WHERE action in ('`+action_create+`','`+action_reference+`')
+            AND target_commit_ts > NVL((
+               SELECT max(target_commit_ts)
+               FROM "`+src_db+`".`+meta_schema+`.`+local_object_log+`
+               WHERE action = '`+action_drop+`'
+            ),'2000-01-01')
+            AND NOT EXISTS (
+               SELECT 1 
+               FROM "`+src_db+`".`+meta_schema+`.`+local_object_log+` l2
+               INNER JOIN "`+src_db+`".`+meta_schema+`.`+local_object_log+` l3
+                  ON l3.table_schema=l2.table_schema
+                     AND l3.table_name=l2.table_name
+                     AND l3.curr_schema_name=l2.curr_schema_name
+                     AND l3.curr_table_version=l2.curr_table_version
+                     AND l3.action = '`+action_drop+`'
+               WHERE l2.run_id = l1.run_id            
+            ) 
+         GROUP BY run_id
+         ORDER BY run_id desc
+      `;
+
+      var ResultSet = (snowflake.createStatement({sqlText:sqlquery})).execute();
+
+      counter=0
+      while (ResultSet.next()) {
+         counter+=1;
+         var id=ResultSet.getColumnValue(1); 
+         var run_id=ResultSet.getColumnValue(2);
+         var refresh_begin=ResultSet.getColumnValue(3);
+         var refresh_end=ResultSet.getColumnValue(4);
+         
+         log("REFRESH SET: "+id+" RUN ID: "+run_id+" BEGIN: "+refresh_begin+" END: "+refresh_end);
+         if (id == requested_refresh_id) {
+            requested_run_id=run_id;
+            break;
+         }
+      } 
+   }
+   log("USING RUN_ID: "+requested_refresh_id)
+
+   if (requested_run_id==0) {
+      throw new Error("REQUESTED REFRESH ID "+requested_refresh_id+" NOT FOUND; TRY MORE RECENT REFRESH SET")
+   }
+
+   sqlquery=`
+      CREATE OR REPLACE TABLE "` + tgt_db + `".` +refresh_tmp + `.` + object_sync_task + ` AS
+         SELECT table_schema object_schema, table_name object_name,target_bytes bytes
+               , curr_schema_name,table_name || '_' || curr_table_version curr_table_name            
+         FROM "`+src_db+`".`+meta_schema+`.`+local_object_log+`
+         WHERE run_id = `+requested_run_id+`
+         ORDER BY table_schema,table_name
+   `;
+   snowflake.execute({sqlText: sqlquery});
+
+   sqlquery=`
+      CREATE OR REPLACE TABLE "` + tgt_db + `"."` + refresh_tmp + `".` + task_partitioned + ` AS
+          SELECT trunc(((SUM(((nvl(bytes,0)/1000000000)*1)::float) OVER (ORDER BY bytes,object_schema,object_name RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) +
+                        (row_number() OVER (ORDER BY bytes,object_schema,object_name RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW))) /
+                       ((SELECT (sum(nvl(bytes,0)/1000000000)*1+1)::float FROM "` + tgt_db + `".` +refresh_tmp + `.` + object_sync_task + `) +
+                        (SELECT sum(1) FROM "` + tgt_db + `".` + refresh_tmp + `.` + object_sync_task + `))
+                     ) * least(
+                           ceil((SELECT SUM(1) FROM "` + tgt_db + `".` + refresh_tmp + `.` + object_sync_task + ` 
+                                 )/`+refresh_min_jobs_per_cluster+`)
+                              ,`+refresh_cluster_count+`))+1 partition_id, t.*
+         FROM "` + tgt_db + `".` + refresh_tmp + `.` + object_sync_task + ` t
+         ORDER BY partition_id, object_schema, object_name
+   `;
+   snowflake.execute({sqlText: sqlquery});
 }
 
 // -----------------------------------------------------------------------------
@@ -1149,116 +1363,32 @@ function refresh (requested_refresh_id)
       snowflake.execute({sqlText: sqlquery});
    }
 
-   if (requested_refresh_id > 0){
-      var requested_run_id=requested_refresh_id;
-      log("REQUESTED RUN_ID: "+requested_refresh_id)
+   create_refresh_task_list();
 
-   } else {
-
-      log("FIND RUN_ID FOR RELATIVE REFRESH SET: "+requested_refresh_id)
-
-      var sqlquery=`
-         SELECT -seq4() id,run_id, to_varchar(min(target_commit_ts),'YYYY-MM-DD HH24:MI:SS')
-                , to_varchar(max(target_commit_ts),'YYYY-MM-DD HH24:MI:SS')
-         FROM "`+src_db+`".`+meta_schema+`.`+local_object_log+` l1
-         WHERE action in ('`+action_create+`','`+action_reference+`')
-            AND target_commit_ts > NVL((
-               SELECT max(target_commit_ts)
-               FROM "`+src_db+`".`+meta_schema+`.`+local_object_log+`
-               WHERE action = '`+action_drop+`'
-            ),'2000-01-01')
-            AND NOT EXISTS (
-               SELECT 1 
-               FROM "`+src_db+`".`+meta_schema+`.`+local_object_log+` l2
-               INNER JOIN "`+src_db+`".`+meta_schema+`.`+local_object_log+` l3
-                  ON l3.table_schema=l2.table_schema
-                     AND l3.table_name=l2.table_name
-                     AND l3.curr_schema_name=l2.curr_schema_name
-                     AND l3.curr_table_version=l2.curr_table_version
-                     AND l3.action = 'DROP'
-               WHERE l2.run_id = l1.run_id            
-            ) 
-         GROUP BY run_id
-         ORDER BY run_id desc
-      `;
-
-      var ResultSet = (snowflake.createStatement({sqlText:sqlquery})).execute();
-
-      counter=0
-      while (ResultSet.next()) {
-         counter+=1;
-         var id=ResultSet.getColumnValue(1); 
-         var run_id=ResultSet.getColumnValue(2);
-         var refresh_begin=ResultSet.getColumnValue(3);
-         var refresh_end=ResultSet.getColumnValue(4);
-         
-         log("REFRESH SET: "+id+" RUN ID: "+run_id+" BEGIN: "+refresh_begin+" END: "+refresh_end);
-         if (id == requested_refresh_id) {
-            requested_run_id=run_id;
-            break;
-         }
-      } 
-   }
-   log("USING RUN_ID: "+requested_refresh_id)
-
-   if (requested_run_id==0) {
-      throw new Error("REQUESTED REFRESH ID "+requested_refresh_id+" NOT FOUND; TRY MORE RECENT REFRESH SET")
-   }
    sqlquery=`
-      SELECT table_schema,table_name,curr_schema_name,table_name || '_' || curr_table_version curr_table_name
-      FROM "`+src_db+`".`+meta_schema+`.`+local_object_log+`
-      WHERE run_id = `+requested_run_id+`
-      ORDER BY table_schema,table_name
+      SELECT count(1)
+      FROM (
+         SELECT distinct partition_id
+         FROM   "` + tgt_db + `"."` + refresh_tmp + `"."` + task_partitioned + `" 
+      ) 
    `;
-   var tableNameResultSet = (snowflake.createStatement({sqlText:sqlquery})).execute();
 
-   counter=0;
-   
-   while (tableNameResultSet.next()) {
-      counter = counter + 1;
-      table_schema=tableNameResultSet.getColumnValue(1);
-      table_name = tableNameResultSet.getColumnValue(2);
-      curr_schema_name = tableNameResultSet.getColumnValue(3);
-      curr_table_name = tableNameResultSet.getColumnValue(4);
-      table_schema_new=internal+"_"+table_schema
+   var ResultSet = (snowflake.createStatement({sqlText:sqlquery})).execute();
 
-      if (table_schema_new != prev_schema) {
-         log("CREATE SCHEMA: "+table_schema_new);
-         prev_schema=table_schema_new;
-
-         sqlquery=`
-            CREATE SCHEMA IF NOT EXISTS "` + tgt_db + `"."` + table_schema + `"
-         `;
-         snowflake.execute({sqlText:  sqlquery});
-
-         sqlquery = `
-            GRANT USAGE ON SCHEMA "` + tgt_db + `"."` + table_schema + `" TO SHARE "` + tgt_share + `"`;
-         snowflake.execute({sqlText: sqlquery});
-
-         sqlquery=`
-            CREATE SCHEMA IF NOT EXISTS "` + tgt_db + `"."` + table_schema_new + `"
-         `;
-         snowflake.execute({sqlText:  sqlquery});
-
-         sqlquery = `
-            GRANT USAGE ON SCHEMA "` + tgt_db + `"."` + table_schema_new + `" TO SHARE "` + tgt_share + `"`;
-         snowflake.execute({sqlText: sqlquery});
+   if (ResultSet.next()) {
+      var partition_count=ResultSet.getColumnValue(1); 
+      if (partition_count == 0) {
+         log("NOTHING TO DO")
+      } else if (partition_count == 1) {
+         log("PROCESSING TASKS FOR PARTITION 1");
+         process_refresh_tasks(1);
+      } else if (partition_count <= max_partition) {
+         wait_for_worker_completion(method_refresh);
+      } else {
+         throw new Error ("TOO MANY PARTITIONS; ABORT");
       }
-
-      log("  CREATE SECURE VIEW: "+table_schema_new+"."+table_name+" FOR "+curr_schema_name+"."+curr_table_name);
-
-      sqlquery = `
-         CREATE OR REPLACE /* # ` + counter + ` */ SECURE VIEW "` + tgt_db + `"."` + table_schema_new + `"."` + table_name + `" AS
-               SELECT * FROM "` + src_db + `"."` + curr_schema_name + `"."` + curr_table_name + `"`;
-      snowflake.execute({sqlText: sqlquery});
-
-      sqlquery = `
-         GRANT SELECT ON /* # ` + counter + ` */ VIEW "` + tgt_db + `"."` + table_schema_new + `"."` + table_name + `" TO SHARE "` + tgt_share + `"`;
-      snowflake.execute({sqlText: sqlquery});
-   }
-
-   if (counter==0){
-      throw new Error("REQUESTED RUN ID NOT FOUND: "+requested_run_id)
+   } else {
+      throw new Error("TASK TABLE NOT FOUND")
    }
 
    log("SWAP SCHEMA");
@@ -1289,7 +1419,6 @@ function refresh (requested_refresh_id)
       snowflake.execute({sqlText: sqlquery});
    }
 }
-
 
 // -----------------------------------------------------------------------------
 // Author      Robert Fehrmann
@@ -1329,7 +1458,7 @@ try {
 
    } else if (method==method_worker_sync){
 
-      snowflake.execute({sqlText: "ALTER TASK \""+tgt_db+"\"."+scheduler_tmp+"."+task_name_worker_sync+"_"+cluster_count+" suspend"});
+      snowflake.execute({sqlText: "ALTER TASK \""+tgt_db+"\"."+scheduler_tmp+"."+task_name_worker_sync+"_"+worker_id+" suspend"});
 
       sqlquery=`
          WITH worker_log 
@@ -1348,7 +1477,7 @@ try {
          FROM "` + tgt_db + `".` + scheduler_tmp + `.` + table_scheduler+` s
             LEFT OUTER JOIN worker_log l 
                ON l.scheduler_session_id = s.scheduler_session_id AND l.partition_id=s.partition_id AND l.create_ts > s.create_ts
-         WHERE s.partition_id = `+cluster_count+`
+         WHERE s.partition_id = `+worker_id+`
       `;
 
       var ResultSet = (snowflake.createStatement({sqlText:sqlquery})).execute();
@@ -1363,7 +1492,7 @@ try {
 
          if (worker_session_id == 0) {
             log("PROCESSING TASKS FOR SCHEDULER ID "+scheduler_session_id+" PARTITION "+partition_id);
-            process_tasks(partition_id);
+            process_sync_tasks(partition_id);
          } else {
             log("PROCESSING FOR SCHEDULER ID "+scheduler_session_id+" PARTITION "+partition_id+" ALREADY DONE BY SESSION "+worker_session_id);
          }
@@ -1372,6 +1501,62 @@ try {
          flush_log(status_end);
          return return_array;
 
+      } else {
+         throw new Error ("PARTITION NOT FOUND")
+      }
+   } else if (method==method_refresh) {
+      log("procName: " + procName + " " + status_begin);
+      flush_log(status_begin);
+
+      refresh(requested_refresh_id);
+
+      log("procName: " + procName + " " + status_end);
+      flush_log(status_end);
+      return return_array;
+   } else if (method==method_worker_refresh){
+
+      snowflake.execute({sqlText: "ALTER TASK \""+tgt_db+"\"."+refresh_tmp+"."+task_name_worker_refresh+"_"+worker_id+" suspend"});
+
+      sqlquery=`
+         WITH worker_log 
+            AS (
+               SELECT partition_id, status, scheduler_session_id, session_id, create_ts
+               FROM (
+                  SELECT partition_id, status, scheduler_session_id, session_id, create_ts
+                        ,row_number() OVER (PARTITION BY scheduler_session_id,partition_id ORDER BY create_ts desc) id
+                  FROM "` + tgt_db + `"."` + meta_schema + `".` + local_log + `
+                  WHERE status in ('`+status_begin+`','`+status_end+`','`+status_failure+`')
+                     AND method = '`+method_worker_refresh+`'
+                  )
+               WHERE id=1
+            )           
+         SELECT s.scheduler_session_id,s.partition_id, nvl(l.session_id,0) worker_session_id
+         FROM "` + tgt_db + `".` + refresh_tmp + `.` + table_scheduler+` s
+            LEFT OUTER JOIN worker_log l 
+               ON l.scheduler_session_id = s.scheduler_session_id AND l.partition_id=s.partition_id AND l.create_ts > s.create_ts
+         WHERE s.partition_id = `+worker_id+`
+      `;
+
+      var ResultSet = (snowflake.createStatement({sqlText:sqlquery})).execute();
+
+      if(ResultSet.next()){
+         scheduler_session_id = ResultSet.getColumnValue(1);
+         partition_id = ResultSet.getColumnValue(2);
+         worker_session_id=ResultSet.getColumnValue(3)
+
+         log("procName: " + procName + " " + status_begin);
+         flush_log(status_begin);
+
+         if (worker_session_id == 0) {
+            log("PROCESSING TASKS FOR SCHEDULER ID "+scheduler_session_id+" PARTITION "+partition_id);
+            process_refresh_tasks(partition_id);
+         } else {
+            log("PROCESSING FOR SCHEDULER ID "+scheduler_session_id+" PARTITION "+partition_id+" ALREADY DONE BY SESSION "+worker_session_id);
+         }
+
+         log("procName: " + procName + " " + status_end);
+         flush_log(status_end);
+         return return_array;
       } else {
          throw new Error ("PARTITION NOT FOUND")
       }
@@ -1385,15 +1570,6 @@ try {
       flush_log(status_end);
       return return_array;
 
-   } else if (method==method_refresh) {
-      log("procName: " + procName + " " + status_begin);
-      flush_log(status_begin);
-
-      refresh(requested_refresh_id);
-
-      log("procName: " + procName + " " + status_end);
-      flush_log(status_end);
-      return return_array;
    } else {
       throw new Error("REQUESTED METHOD NOT FOUND; "+method);
    }
