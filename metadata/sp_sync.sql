@@ -1275,7 +1275,7 @@ function create_refresh_task_list () {
          }
       } 
    }
-   log("USING RUN_ID: "+requested_refresh_id)
+   log("USING RUN_ID: "+requested_run_id)
 
    if (requested_run_id==0) {
       throw new Error("REQUESTED REFRESH ID "+requested_refresh_id+" NOT FOUND; TRY MORE RECENT REFRESH SET")
@@ -1305,6 +1305,8 @@ function create_refresh_task_list () {
          ORDER BY partition_id, object_schema, object_name
    `;
    snowflake.execute({sqlText: sqlquery});
+
+   return requested_run_id;
 }
 
 // -----------------------------------------------------------------------------
@@ -1363,7 +1365,7 @@ function refresh (requested_refresh_id)
       snowflake.execute({sqlText: sqlquery});
    }
 
-   create_refresh_task_list();
+   requested_run_id=create_refresh_task_list();
 
    sqlquery=`
       SELECT count(1)
