@@ -1223,6 +1223,8 @@ function scheduler ()
 // -----------------------------------------------------------------------------
 function create_refresh_task_list () {
 
+   var requested_run_id=0;
+
    log("CREATE REFRESH TASK LIST")
 
    if (requested_refresh_id > 0){
@@ -1275,10 +1277,11 @@ function create_refresh_task_list () {
          }
       } 
    }
-   log("USING RUN_ID: "+requested_run_id)
 
    if (requested_run_id==0) {
       throw new Error("REQUESTED REFRESH ID "+requested_refresh_id+" NOT FOUND; TRY MORE RECENT REFRESH SET")
+   } else {
+      log("USING RUN_ID: "+requested_run_id)
    }
 
    sqlquery=`
