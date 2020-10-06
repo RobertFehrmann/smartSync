@@ -78,7 +78,7 @@ All calls to the sp_sync stored procedure have 4 parameters.
 
 ### SP_SYNC
     
-    create or replace procedure SP_SYNC_GS(
+    create or replace procedure SP_SYNC(
         I_METHOD VARCHAR
         ,I_METHOD_PARAM FLOAT
         ,I_SRC_DB VARCHAR
