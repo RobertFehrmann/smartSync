@@ -11,7 +11,10 @@ CREATE OR REPLACE VIEW <local database>.smart_sync_metadata.smart_sync_delta_cha
                 ,crux_ingestion_dt
                 ,notification_dt
                 , row_number() OVER (PARTITION BY view_name ORDER BY crux_ingestion_dt desc, notification_dt desc) id
-        FROM  <fully qualified path to CRUX notifation table>
-        WHERE crux_ingestion_dt >= <delta_sync_start_date>)
+        FROM  (SELECT table_name
+               FROM   <CRUX shared database name>.information_schema.tables 
+               WHERE table_schema='CRUX_GENERAL') i
+            INNER JOINT <fully qualified path to CRUX notifation table> n ON n.view_name = i.table_name
+        WHERE crux_ingestion_dt < <delta_sync_start_date>)
     WHERE id = 1
     ORDER BY object_name;
