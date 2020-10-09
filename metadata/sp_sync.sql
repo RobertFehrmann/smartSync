@@ -773,9 +773,9 @@ function create_sync_task_list() {
 
    sqlquery=`
       CREATE OR REPLACE TABLE "` + tgt_db + `"."` + scheduler_tmp + `".` + task_partitioned + ` AS
-          SELECT trunc(((SUM(((nvl(bytes,0)/1000000000)*12)::float) OVER (ORDER BY bytes,object_schema,object_name RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) +
-                        (row_number() OVER (ORDER BY bytes,object_schema,object_name RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW))) /
-                       ((SELECT (sum(nvl(bytes,0)/1000000000)*12+1)::float FROM "` + tgt_db + `".` + scheduler_tmp + `.` + object_sync_task + `) +
+          SELECT trunc(((SUM(((nvl(bytes,0)/1000000000)*8)::float) OVER (ORDER BY bytes,object_schema,hash(object_name) RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) +
+                        (row_number() OVER (ORDER BY bytes,object_schema,hash(object_name) RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW))) /
+                       ((SELECT (sum(nvl(bytes,0)/1000000000)*8+1)::float FROM "` + tgt_db + `".` + scheduler_tmp + `.` + object_sync_task + `) +
                         (SELECT sum(1) FROM "` + tgt_db + `".` + scheduler_tmp + `.` + object_sync_task + `))
                      ) * least(
                            ceil((SELECT SUM(1) FROM "` + tgt_db + `".` + scheduler_tmp + `.` + object_sync_task + ` 
