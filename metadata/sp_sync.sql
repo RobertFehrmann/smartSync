@@ -886,7 +886,7 @@ function kill_all_running_worker_queries(process) {
       worker_id        = ResultSet.getColumnValue(1);
       worker_session_id= ResultSet.getColumnValue(2);
 
-      log("      FIND RUNNING QUERIES FOR WORKER ID: "+worker_id+" SESSION_ID: "+worker_session_id);
+      log("      WORKER ID: "+worker_id+" SESSION_ID: "+worker_session_id);
 
       sqlquery2=`
             SELECT query_id 
