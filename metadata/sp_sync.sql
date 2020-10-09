@@ -97,11 +97,14 @@ const max_number_schemas=365;
 const worker_timeout=3*60*60*1000;
 const wait_to_poll=30;
 const max_worker_wait_loop = worker_timeout/60/1000/(wait_to_poll/60);
-const min_jobs_per_cluster = 16;
+const max_sync_cluster_count=32;
+const sync_partition_count=cluster_count;
+const sync_min_jobs_per_partition = 16;
+const max_refresh_cluster_count=4;
+const refresh_partition_count=8*max_refresh_cluster_count;
+const refresh_min_jobs_per_partition=32;
 const task_partition_set_size=16;
 const max_partition=32;
-const refresh_cluster_count=24;
-const refresh_min_jobs_per_cluster=64;
 
 // internal enum constants
 const method_sync='SYNC';
@@ -779,8 +782,8 @@ function create_sync_task_list() {
                         (SELECT sum(1) FROM "` + tgt_db + `".` + scheduler_tmp + `.` + object_sync_task + `))
                      ) * least(
                            ceil((SELECT SUM(1) FROM "` + tgt_db + `".` + scheduler_tmp + `.` + object_sync_task + ` 
-                                 )/`+min_jobs_per_cluster+`)
-                              ,`+cluster_count+`))+1 partition_id, t.*
+                                 )/`+sync_min_jobs_per_partition+`)
+                              ,`+sync_partition_count+`))+1 partition_id, t.*
          FROM "` + tgt_db + `".` + scheduler_tmp + `.` + object_sync_task + ` t
          ORDER BY partition_id, object_schema, object_type, object_name
    `;
@@ -948,15 +951,19 @@ function wait_for_worker_completion(process) {
    var process_tmp="";
    var task_name_worker="";
    var method_worker="";
+   var partition_id_tmp=0;
+   var process_cluster_count=0;
 
    if (process==method_sync){
       process_tmp=scheduler_tmp;
       task_name_worker=task_name_worker_sync;
       method_worker=method_worker_sync;
+      process_cluster_count=cluster_count;
    } else if (process==method_refresh){
       process_tmp=refresh_tmp
       task_name_worker=task_name_worker_refresh;
       method_worker=method_worker_refresh;
+      process_cluster_count=max_refresh_cluster_count;
    } else {
       throw new error ("PROCESS NOT FOUND: "+process)
    }
@@ -986,11 +993,9 @@ function wait_for_worker_completion(process) {
       FROM   "` + tgt_db + `"."` + process_tmp + `"."` + table_scheduler+ `" 
       ORDER BY 1
    `;
-
    var ResultSet = (snowflake.createStatement({sqlText:sqlquery})).execute();
-
    while (ResultSet.next()) {
-      var partition_id_tmp=ResultSet.getColumnValue(1); 
+      partition_id_tmp=ResultSet.getColumnValue(1); 
       sqlquery=`
          CREATE OR REPLACE TASK "` + tgt_db + `".` + process_tmp + `."` + task_name_worker + `_` + partition_id_tmp +`"
             WAREHOUSE =  `+current_warehouse+`
@@ -1006,7 +1011,8 @@ function wait_for_worker_completion(process) {
       snowflake.execute({sqlText:  sqlquery});
    }
 
-   set_min_cluster_count(cluster_count);
+   // start one cluster per partition
+   set_min_cluster_count(process_cluster_count);
    set_min_cluster_count(1);
 
    sqlquery=`
@@ -1399,8 +1405,8 @@ function create_refresh_task_list () {
                         (SELECT sum(1) FROM "` + tgt_db + `".` + refresh_tmp + `.` + object_sync_task + `))
                      ) * least(
                            ceil((SELECT SUM(1) FROM "` + tgt_db + `".` + refresh_tmp + `.` + object_sync_task + ` 
-                                 )/`+refresh_min_jobs_per_cluster+`)
-                              ,`+refresh_cluster_count+`))+1 partition_id, t.*
+                                 )/`+refresh_min_jobs_per_partition+`)
+                              ,`+refresh_partition_count+`))+1 partition_id, t.*
          FROM "` + tgt_db + `".` + refresh_tmp + `.` + object_sync_task + ` t
          ORDER BY partition_id, object_schema, object_name
    `;
