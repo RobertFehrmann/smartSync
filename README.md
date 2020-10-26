@@ -194,7 +194,7 @@ The following steps need to be executed for every database
     use <warehouse>;
     call smart_sync_db.metadata.sp_sync('REFRESH',0,<local db>,<target shared db>);
     ```
-1. Create the necessary tasks to run the steps on a regular schedule. The defaults below schedule the tasks at 4:00 AM EST on a daily basis. Modify the schedule as needed. The Number of parallel tasks 
+1. Create the necessary tasks to run the steps on a regular schedule. The defaults below schedule the tasks at 4:00 AM EST on a daily basis. Modify the schedule as needed. The degree of parallelism depends again on the shared dataset. By default the number of parallel tasks is set to 4. This works well for databases with less than 500 tables. 2000 Tables work well with 10 parallel tasks.   
     ```
     use role smart_sync_rl;
     create or replace task identifier <sync task>
@@ -202,7 +202,7 @@ The following steps need to be executed for every database
       SCHEDULE = 'USING CRON 0 4 * * * US/Eastern'
       USER_TASK_TIMEOUT_MS = 10800000
       AS 
-        call smart_sync_db.metadata.sp_sync('SYNC',<# parallel tasks>,'<shared db','<local db>');
+        call smart_sync_db.metadata.sp_sync('SYNC',<degree of parallelism>,'<shared db','<local db>');
 
     create or replace task <refresh task>
       WAREHOUSE = <warehouse>
