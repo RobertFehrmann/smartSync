@@ -132,7 +132,8 @@ There are several customizations you can make by modifying parameters in the sou
 The following steps need to be executed for every database
 
 1. Though it's not required, it is recommended to run every sync setup(database) with it's own dedicted warehouse. Set MAX_CLUSTER_COUNT to the appropriate value based on the size of the biggest object, number of objects and desired runtime SLA. For instance, you can expect to run 1 degrees of parallelizm per cluster. To avoid a long tail problem, i.e. the minimum run time is determined by the largest object (table/view), do not increase the degree of parallelizm when the worker processes with only one object to process.
-    Note: If you grant "modify" to the custom role, the SmartSync will allocate all required clusters before task processing starts. This has a positive impact on overall runtime since SmartSync doesn't have to wait for the scale-out events.
+    Note: If you grant "modify" to the custom role, SmartSync allocates all required clusters before task processing starts. This has a positive impact on overall runtime since SmartSync doesn't have to wait for the scale-out events. 
+    Getting sizing information from the data provider helps you to decide what warehouse size to use. Take the biggest (by size) shared table and start small. Tables below 10 GB work well with XSMALL, less than 100 GB => SMALL, less than 1 TB =>MEDIUM.
     ```
     use role accountadmin;
     drop warehouse if exists smart_sync_<warehouse>;
@@ -189,6 +190,25 @@ The following steps need to be executed for every database
 1. Run the refresh command
     ```
     use role smart_sync_rl;
-    call smart_sync_db.metadata.sp_sync('REFRESH',0,<local db>,<target db>);
+    call smart_sync_db.metadata.sp_sync('REFRESH',0,<local db>,<target shared db>);
     ```
-1. Create the necessary tasks to run 
+1. Create the necessary tasks to run the steps on a regular schedule. The defaults below schedule the tasks at 4:00 AM EST on a daily basis. Modify the schedule as needed. The Number of parallel tasks 
+    ```
+    use role smart_sync_rl;
+    create or replace task identifier <sync task>
+      WAREHOUSE = $warehouse
+      SCHEDULE = 'USING CRON 0 4 * * * US/Eastern'
+      USER_TASK_TIMEOUT_MS = 10800000
+      AS 
+        call smart_sync_db.metadata.sp_sync('SYNC',<# parallel tasks>,'<shared db','<local db>');
+
+    create or replace task <refresh task>
+      WAREHOUSE = $warehouse
+      USER_TASK_TIMEOUT_MS = 10800000
+      AFTER <sync task>
+      AS 
+        call smart_sync_db.metadata.sp_sync('REFRESH',0,'<local db>','<target shared db>');
+
+    alter task identifier <sync task> resume; 
+    alter task identifier<refresh task> resume; 
+    ```
