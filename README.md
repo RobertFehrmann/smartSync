@@ -127,12 +127,12 @@ There are several customizations you can make by modifying parameters in the sou
     grant usage on procedure smart_sync_db.metadata.sp_sync(varchar,float,varchar,varchar) to role smart_sync_rl;
     ```
 
-## Operations
+## Operations (source side)
 
 The following steps need to be executed for every database
 
 1. Though it's not required, it is recommended to run every sync setup(database) with it's own dedicted warehouse. Set MAX_CLUSTER_COUNT to the appropriate value based on the size of the biggest object, number of objects and desired runtime SLA. For instance, you can expect to run 1 degrees of parallelizm per cluster. To avoid a long tail problem, i.e. the minimum run time is determined by the largest object (table/view), do not increase the degree of parallelizm when the worker processes with only one object to process.
-Note: If you grant "modify" to the custom role, the SmartSync will allocate all required clusters before task processing starts. This has a positive impact on overall runtime since SmartSync doesn't have to wait for the scale-out events.
+    Note: If you grant "modify" to the custom role, the SmartSync will allocate all required clusters before task processing starts. This has a positive impact on overall runtime since SmartSync doesn't have to wait for the scale-out events.
     ```
     use role accountadmin;
     drop warehouse if exists smart_sync_<warehouse>;
@@ -166,21 +166,20 @@ Note: If you grant "modify" to the custom role, the SmartSync will allocate all 
     create database <source db> from share <provider account>.<source db>;
     grant imported privileges on database <source db> to role smart_sync_rl;
     ```
-1. (Optional) Smart Sync supports a delta sync concept by providing a view that lists all tables to be syncd. If a delta sync table is provided, SmartSync syncs exactly the objects listed in the view. SmartSync will not create a fingerprint for the source tables and therefor processing can be faster in case source tables are very big or the number of changed tables is considerably smaller then the total number of tables. 
-
-1. Use the initial sync template from folder provider/crux to limit the secure views to re synced to the desired list. Set the date to the previous day. This ensures that SmartSync finds the most recent copy of all objects to be synced. 
+1. (Optional) Smart Sync supports a delta sync concept by providing a view that lists all tables to be syncd. If a delta sync table is provided, SmartSync syncs exactly the objects listed in the view. SmartSync will not create a fingerprint for the source tables and therefor processing can be faster in case source tables are very big or the number of changed tables is considerably smaller then the total number of tables.  
+    Use the initial sync template from folder provider/crux to limit the secure views to re synced to the desired list. Set the date to the previous day. This ensures that SmartSync finds the most recent copy of all objects to be synced. Run the sync command (see below) to initiate the initial sync.
     ```
     use role smart_sync_rl;
     create schema <local db>.SMART_SYNC_METADATA;
     create view <local db>.SMART_SYNC_METADATA.SMART_SYNC_DELTA_CHANGE
-        as select * ... (take initial sync template from folder provider/Crux
+        as select * ... (take delta_sync_initial template from folder provider/Crux
     ```
-1. Use the delta sync template from folder provider/crux to limit the secure views to re synced to the desired list. Set the date to the previous day. This ensures that SmartSync finds the most recent copy of all objects to be synced. 
+    After a successful initial sync use the delta_sync template from folder provider/crux and override the delta sync view from the prvious step. Note that the date filter is now going from the current date forward. This ensures that SmartSync finds the most recent copy of all objects to be synced. Run the sync command (see below) to initiate the first delta sync.
     ```
     use role smart_sync_rl;
-    create schema <local db>.SMART_SYNC_METADATA;
+    create schema if not exists <local db>.SMART_SYNC_METADATA;
     create view <local db>.SMART_SYNC_METADATA.SMART_SYNC_DELTA_CHANGE
-        as select * ... (take delta sync template from folder provider/Crux
+        as select * ... (take delta_sync template from folder provider/Crux
     ```
 1. Run the sync command 
     ```
@@ -192,3 +191,4 @@ Note: If you grant "modify" to the custom role, the SmartSync will allocate all 
     use role smart_sync_rl;
     call smart_sync_db.metadata.sp_sync('REFRESH',0,<local db>,<target db>);
     ```
+1. Create the necessary tasks to run 
