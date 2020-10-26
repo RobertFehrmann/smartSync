@@ -168,20 +168,20 @@ Note: If you grant "modify" to the custom role, the SmartSync will allocate all 
     ```
 1. (Optional) Smart Sync supports a delta sync concept by providing a view that lists all tables to be syncd. If a delta sync table is provided, SmartSync syncs exactly the objects listed in the view. SmartSync will not create a fingerprint for the source tables and therefor processing can be faster in case source tables are very big or the number of changed tables is considerably smaller then the total number of tables. 
 
-1.1. Use the initial sync template from folder provider/crux to limit the secure views to re synced to the desired list. Set the date to the previous day. This ensures that SmartSync finds the most recent copy of all objects to be synced. 
-        ```
-        use role smart_sync_rl;
-        create schema <local db>.SMART_SYNC_METADATA;
-        create view <local db>.SMART_SYNC_METADATA.SMART_SYNC_DELTA_CHANGE
-            as select * ... (take initial sync template from folder provider/Crux
-        ```
-1.1. Use the delta sync template from folder provider/crux to limit the secure views to re synced to the desired list. Set the date to the previous day. This ensures that SmartSync finds the most recent copy of all objects to be synced. 
-        ```
-        use role smart_sync_rl;
-        create schema <local db>.SMART_SYNC_METADATA;
-        create view <local db>.SMART_SYNC_METADATA.SMART_SYNC_DELTA_CHANGE
-            as select * ... (take delta sync template from folder provider/Crux
-        ```
+1. Use the initial sync template from folder provider/crux to limit the secure views to re synced to the desired list. Set the date to the previous day. This ensures that SmartSync finds the most recent copy of all objects to be synced. 
+    ```
+    use role smart_sync_rl;
+    create schema <local db>.SMART_SYNC_METADATA;
+    create view <local db>.SMART_SYNC_METADATA.SMART_SYNC_DELTA_CHANGE
+        as select * ... (take initial sync template from folder provider/Crux
+    ```
+1. Use the delta sync template from folder provider/crux to limit the secure views to re synced to the desired list. Set the date to the previous day. This ensures that SmartSync finds the most recent copy of all objects to be synced. 
+    ```
+    use role smart_sync_rl;
+    create schema <local db>.SMART_SYNC_METADATA;
+    create view <local db>.SMART_SYNC_METADATA.SMART_SYNC_DELTA_CHANGE
+        as select * ... (take delta sync template from folder provider/Crux
+    ```
 1. Run the sync command 
     ```
     use role smart_sync_rl;
