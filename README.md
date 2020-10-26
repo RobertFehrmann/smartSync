@@ -131,9 +131,7 @@ There are several customizations you can make by modifying parameters in the sou
 
 The following steps need to be executed for every database
 
-
-
-1.1 Though it's not required, it is recommended to run every sync setup(database) with it's own dedicted warehouse. Set MAX_CLUSTER_COUNT to the appropriate value based on the size of the biggest object, number of objects and desired runtime SLA. For instance, you can expect to run 1 degrees of parallelizm per cluster. To avoid a long tail problem, i.e. the minimum run time is determined by the largest object (table/view), do not increase the degree of parallelizm when the worker processes with only one object to process.
+1. Though it's not required, it is recommended to run every sync setup(database) with it's own dedicted warehouse. Set MAX_CLUSTER_COUNT to the appropriate value based on the size of the biggest object, number of objects and desired runtime SLA. For instance, you can expect to run 1 degrees of parallelizm per cluster. To avoid a long tail problem, i.e. the minimum run time is determined by the largest object (table/view), do not increase the degree of parallelizm when the worker processes with only one object to process.
 Note: If you grant "modify" to the custom role, the SmartSync will allocate all required clusters before task processing starts. This has a positive impact on overall runtime since SmartSync doesn't have to wait for the scale-out events.
     ```
     use role accountadmin;
@@ -147,37 +145,37 @@ Note: If you grant "modify" to the custom role, the SmartSync will allocate all 
        MAX_CONCURRENCY_LEVEL=2;
     grant usage,operate,monitor,modify on warehouse smart_sync_<warehouse> to role smart_sync_rl;
     ```
-1.1 Create the target (local) database, and grant the necessary permission to role smart_sync_rl
+1. Create the target (local) database, and grant the necessary permission to role smart_sync_rl
     ```
     use role AccountAdmin;
     drop database if exists <local db>;
     create database <local db>;
     grant all on database <local db> to role smart_sync_rl with grant option;
     ```
-1.1 Create the target (shared) database, and grant the necessary permission to role smart_sync_rl
+1. Create the target (shared) database, and grant the necessary permission to role smart_sync_rl
     ```
     use role AccountAdmin;
     drop database if exists <shared db>;
     create database <shared db>;
     grant all on database <shared db> to role smart_sync_rl with grant option;
     ```
-1.1 Create the source database from the share and grant the necessary permission to role smart_sync_rl
+1. Create the source database from the share and grant the necessary permission to role smart_sync_rl
     ```
     use role AccountAdmin;
     drop database if exists <source db>;
     create database <source db> from share <provider account>.<source db>;
     grant imported privileges on database <source db> to role smart_sync_rl;
     ```
-1.1 (Optional) Smart Sync supports a delta sync concept by providing a view that lists all tables to be syncd. If a delta sync table is provided, SmartSync syncs exactly the objects listed in the view. SmartSync will not create a fingerprint for the source tables and therefor processing can be faster in case source tables are very big or the number of changed tables is considerably smaller then the total number of tables. 
+1. (Optional) Smart Sync supports a delta sync concept by providing a view that lists all tables to be syncd. If a delta sync table is provided, SmartSync syncs exactly the objects listed in the view. SmartSync will not create a fingerprint for the source tables and therefor processing can be faster in case source tables are very big or the number of changed tables is considerably smaller then the total number of tables. 
 
-1.1.1 Use the initial sync template from folder provider/crux to limit the secure views to re synced to the desired list. Set the date to the previous day. This ensures that SmartSync finds the most recent copy of all objects to be synced. 
+1.1. Use the initial sync template from folder provider/crux to limit the secure views to re synced to the desired list. Set the date to the previous day. This ensures that SmartSync finds the most recent copy of all objects to be synced. 
         ```
         use role smart_sync_rl;
         create schema <local db>.SMART_SYNC_METADATA;
         create view <local db>.SMART_SYNC_METADATA.SMART_SYNC_DELTA_CHANGE
             as select * ... (take initial sync template from folder provider/Crux
         ```
-1.1.1 Use the delta sync template from folder provider/crux to limit the secure views to re synced to the desired list. Set the date to the previous day. This ensures that SmartSync finds the most recent copy of all objects to be synced. 
+1.1. Use the delta sync template from folder provider/crux to limit the secure views to re synced to the desired list. Set the date to the previous day. This ensures that SmartSync finds the most recent copy of all objects to be synced. 
         ```
         use role smart_sync_rl;
         create schema <local db>.SMART_SYNC_METADATA;
