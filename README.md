@@ -194,23 +194,23 @@ The following steps need to be executed for every database
     use <warehouse>;
     call smart_sync_db.metadata.sp_sync('REFRESH',0,<local db>,<target shared db>);
     ```
-1. Create the necessary tasks to run the steps on a regular schedule. The defaults below schedule the tasks at 4:00 AM EST on a daily basis. Modify the schedule as needed.    
+1. Create the necessary tasks to run the steps on a regular schedule. The defaults below schedule the tasks at 4:00 AM EST on a daily basis. Modify the schedule as needed. For consistency purposes, create the tasks in the local database.     
     ```
     use role smart_sync_rl;
-    create or replace task identifier <sync task>
+    create or replace task <local db>.smart_sync_metadata.<sync task>
       WAREHOUSE = <warehouse>
       SCHEDULE = 'USING CRON 0 4 * * * US/Eastern'
       USER_TASK_TIMEOUT_MS = 10800000
       AS 
         call smart_sync_db.metadata.sp_sync('SYNC',<degree of parallelism>,'<shared db'>,'<local db>');
 
-    create or replace task <refresh task>
+    create or replace task <local db>.smart_sync_metadata.<refresh task>
       WAREHOUSE = <warehouse>
       USER_TASK_TIMEOUT_MS = 10800000
-      AFTER <sync task>
+      AFTER <local db>.smart_sync_metadata.<sync task>
       AS 
         call smart_sync_db.metadata.sp_sync('REFRESH',0,'<local db>','<target shared db>');
 
-    alter task identifier <sync task> resume; 
-    alter task identifier <refresh task> resume; 
+    alter task  <local db>.smart_sync_metadata.<sync task> resume; 
+    alter task  <local db>.smart_sync_metadata.<refresh task> resume; 
     ```
