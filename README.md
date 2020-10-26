@@ -202,7 +202,7 @@ The following steps need to be executed for every database
       SCHEDULE = 'USING CRON 0 4 * * * US/Eastern'
       USER_TASK_TIMEOUT_MS = 10800000
       AS 
-        call smart_sync_db.metadata.sp_sync('SYNC',<degree of parallelism>,'<shared db','<local db>');
+        call smart_sync_db.metadata.sp_sync('SYNC',<degree of parallelism>,'<shared db'>,'<local db>');
 
     create or replace task <refresh task>
       WAREHOUSE = <warehouse>
@@ -212,5 +212,5 @@ The following steps need to be executed for every database
         call smart_sync_db.metadata.sp_sync('REFRESH',0,'<local db>','<target shared db>');
 
     alter task identifier <sync task> resume; 
-    alter task identifier<refresh task> resume; 
+    alter task identifier <refresh task> resume; 
     ```
