@@ -182,7 +182,7 @@ The following steps need to be executed for every database
     create view <local db>.SMART_SYNC_METADATA.SMART_SYNC_DELTA_CHANGE
         as select * ... (take delta_sync template from folder provider/Crux
     ```
-1. Run the sync command 
+1. Run the sync command. The degree of parallelism depends again on the shared dataset. By default the number of parallel tasks is set to 4. This works well for databases with less than 500 tables. 2000 Tables work well with 10 parallel tasks.
     ```
     use role smart_sync_rl;
     use <warehouse>
@@ -194,7 +194,7 @@ The following steps need to be executed for every database
     use <warehouse>;
     call smart_sync_db.metadata.sp_sync('REFRESH',0,<local db>,<target shared db>);
     ```
-1. Create the necessary tasks to run the steps on a regular schedule. The defaults below schedule the tasks at 4:00 AM EST on a daily basis. Modify the schedule as needed. The degree of parallelism depends again on the shared dataset. By default the number of parallel tasks is set to 4. This works well for databases with less than 500 tables. 2000 Tables work well with 10 parallel tasks.   
+1. Create the necessary tasks to run the steps on a regular schedule. The defaults below schedule the tasks at 4:00 AM EST on a daily basis. Modify the schedule as needed.    
     ```
     use role smart_sync_rl;
     create or replace task identifier <sync task>
