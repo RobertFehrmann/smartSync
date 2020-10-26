@@ -149,7 +149,7 @@ Note: If you grant "modify" to the custom role, the SmartSync will allocate all 
     ```
     use role AccountAdmin;
     drop database if exists <local db>;
-    create database <local database>;
+    create database <local db>;
     grant all on database <local db> to role smart_sync_rl with grant option;
     ```
 1. Create the source database from the share and grant the necessary permission the role smart_sync_rl
