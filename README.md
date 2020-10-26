@@ -175,7 +175,7 @@ The following steps need to be executed for every database
     create view <local db>.SMART_SYNC_METADATA.SMART_SYNC_DELTA_CHANGE
         as select * ... (take delta_sync_initial template from folder provider/Crux
     ```
-    After a successful initial sync use the delta_sync template from folder provider/crux and override the delta sync view from the prvious step. Note that the date filter is now going from the current date forward. This ensures that SmartSync finds the most recent copy of all objects to be synced. Run the sync command (see below) to initiate the first delta sync.
+    After a successful initial sync use the delta_sync template from folder provider/crux and override the delta sync view from the prvious step. Note that the date filter is now going from the current date forward. This ensures that SmartSync finds the most recent copy of all objects to be synced. Run the sync command (see below) to initiate the first delta sync. Be sure to set your context, i.e. role and warehouse (from above).
     ```
     use role smart_sync_rl;
     create schema if not exists <local db>.SMART_SYNC_METADATA;
@@ -185,25 +185,27 @@ The following steps need to be executed for every database
 1. Run the sync command 
     ```
     use role smart_sync_rl;
+    use <warehouse>
     call smart_sync_db.metadata.sp_sync('SYNC',<degree of parallelizm>,<shared db>,<local db>);
     ```
 1. Run the refresh command
     ```
     use role smart_sync_rl;
+    use <warehouse>;
     call smart_sync_db.metadata.sp_sync('REFRESH',0,<local db>,<target shared db>);
     ```
 1. Create the necessary tasks to run the steps on a regular schedule. The defaults below schedule the tasks at 4:00 AM EST on a daily basis. Modify the schedule as needed. The Number of parallel tasks 
     ```
     use role smart_sync_rl;
     create or replace task identifier <sync task>
-      WAREHOUSE = $warehouse
+      WAREHOUSE = <warehouse>
       SCHEDULE = 'USING CRON 0 4 * * * US/Eastern'
       USER_TASK_TIMEOUT_MS = 10800000
       AS 
         call smart_sync_db.metadata.sp_sync('SYNC',<# parallel tasks>,'<shared db','<local db>');
 
     create or replace task <refresh task>
-      WAREHOUSE = $warehouse
+      WAREHOUSE = <warehouse>
       USER_TASK_TIMEOUT_MS = 10800000
       AFTER <sync task>
       AS 
