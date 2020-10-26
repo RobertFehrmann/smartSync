@@ -134,6 +134,7 @@ The following steps need to be executed for every database
 1. Though it's not required, it is recommended to run every sync setup(database) with it's own dedicted warehouse. Set MAX_CLUSTER_COUNT to the appropriate value based on the size of the biggest object, number of objects and desired runtime SLA. For instance, you can expect to run 1 degrees of parallelizm per cluster. To avoid a long tail problem, i.e. the minimum run time is determined by the largest object (table/view), do not increase the degree of parallelizm when the worker processes with only one object to process.
 Note: If you grant "modify" to the custom role, the SmartSync will allocate all required clusters before task processing starts. This has a positive impact on overall runtime since SmartSync doesn't have to wait for the scale-out events.
     ```
+    use role accountadmin;
     drop warehouse if exists smart_sync_<warehouse>;
     create warehouse smart_sync_<warehouse> with 
        WAREHOUSE_SIZE = XSMALL 
