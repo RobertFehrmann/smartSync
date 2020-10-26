@@ -138,11 +138,11 @@ Note: If you grant "modify" to the custom role, the SmartSync will allocate all 
     create warehouse smart_sync_<warehouse> with 
        WAREHOUSE_SIZE = XSMALL 
        MAX_CLUSTER_COUNT = <X>
-       SCALING POLICY = STANDARD
+       SCALING_POLICY = STANDARD
        AUTO_SUSPEND = 15 
        AUTO_RESUME = TRUE
        MAX_CONCURRENCY_LEVEL=2;
-    grant usage,operate,monitor,modify on warehouse smart_sync_vwh to role smart_sync_rl;
+    grant usage,operate,monitor,modify on warehouse smart_sync_<warehouse> to role smart_sync_rl;
     ```
 1. Create the target (local) database, grant the necessary permission the role smart_sync_rl
     ```
