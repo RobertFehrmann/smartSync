@@ -211,6 +211,7 @@ The following steps need to be executed for every database
       AS 
         call smart_sync_db.metadata.sp_sync('REFRESH',0,'<local db>','<target shared db>');
 
+    
+    alter task  <local db>.smart_sync_metadata.<refresh task> resume;
     alter task  <local db>.smart_sync_metadata.<sync task> resume; 
-    alter task  <local db>.smart_sync_metadata.<refresh task> resume; 
     ```
