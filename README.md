@@ -215,6 +215,11 @@ The following steps need to be executed for every database. Note: [Setup Steps](
     alter task  <local db>.smart_sync_metadata.<refresh task> resume;
     alter task  <local db>.smart_sync_metadata.<sync task> resume; 
     ```
+1. The last step on the source side is to enable replication for the local database so the target side.
+    ```
+    alter database <local db> enable replication to accounts <remote region>.<remote account>
+    ```
+
 ## Operations (target side)
 
 The following steps need to be executed for every database to be sync'd. Note: [Setup Steps](#Setup) listed above need to be executed before you can start this section.
@@ -238,7 +243,7 @@ The following steps need to be executed for every database to be sync'd. Note: [
     drop share if exists <shared_database>_share;
     drop database if exists <local db>;
     use role AccountAdmin;
-    create database <local db> as replicat of <source region>.<source local database>;
+    create database <local db> as replica of <source region>.<source account>.<source local database>;
     grant ownerhsip on database <local db> to role smart_sync_rl;
     ```
 1. Create the target (shared) database, and grant the necessary permission to role smart_sync_rl
