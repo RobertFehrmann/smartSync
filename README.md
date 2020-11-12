@@ -217,7 +217,7 @@ The following steps need to be executed for every database. Note: [Setup Steps](
     ```
 1. The last step on the source side is to enable replication for the local database so the target side.
     ```
-    alter database <local db> enable replication to accounts <remote region>.<remote account>
+    alter database <local db> enable replication to accounts <remote region>.<remote account>;
     ```
 
 ## Operations (target side)
