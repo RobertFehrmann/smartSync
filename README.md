@@ -129,7 +129,7 @@ There are several customizations you can make by modifying parameters in the sou
 
 ## Operations (source side)
 
-The following steps need to be executed for every database
+The following steps need to be executed for every database. Note: [Setup Steps](#Setup) listed above need to be executed before you can start this section.
 
 1. Though it's not required, it is recommended to run every sync setup(database) with it's own dedicted warehouse. Set MAX_CLUSTER_COUNT to the appropriate value based on the size of the biggest object, number of objects and desired runtime SLA. For instance, you can expect to run 1 degrees of parallelizm per cluster. To avoid a long tail problem, i.e. the minimum run time is determined by the largest object (table/view), do not increase the degree of parallelizm when the worker processes with only one object to process.
     Note: If you grant "modify" to the custom role, SmartSync allocates all required clusters before task processing starts. This has a positive impact on overall runtime since SmartSync doesn't have to wait for the scale-out events. 
@@ -215,3 +215,63 @@ The following steps need to be executed for every database
     alter task  <local db>.smart_sync_metadata.<refresh task> resume;
     alter task  <local db>.smart_sync_metadata.<sync task> resume; 
     ```
+## Operations (target side)
+
+The following steps need to be executed for every database to be sync'd. Note: [Setup Steps](#Setup) listed above need to be executed before you can start this section.
+
+1. Though it's not required, it is recommended to run every sync setup(database) with it's own dedicted warehouse. Set MAX_CLUSTER_COUNT to the appropriate value based on the size of the biggest object, number of objects and desired runtime SLA. For instance, you can expect to run 1 degrees of parallelizm per cluster. To avoid a long tail problem, i.e. the minimum run time is determined by the largest object (table/view), do not increase the degree of parallelizm when the worker processes with only one object to process.
+    Note: If you grant "modify" to the custom role, SmartSync allocates all required clusters before task processing starts. This has a positive impact on overall runtime since SmartSync doesn't have to wait for the scale-out events. 
+    Getting sizing information from the data provider helps you to decide what warehouse size to use. Take the biggest (by size) shared table and start small. Tables below 10 GB work well with XSMALL, less than 100 GB => SMALL, less than 1 TB =>MEDIUM.
+    ```
+    use role accountadmin;
+    drop warehouse if exists smart_sync_<warehouse>;
+    create warehouse smart_sync_<warehouse> with 
+       WAREHOUSE_SIZE = XSMALL 
+       MAX_CLUSTER_COUNT = <X>
+       SCALING_POLICY = STANDARD
+       AUTO_SUSPEND = 15 
+       AUTO_RESUME = TRUE
+       MAX_CONCURRENCY_LEVEL=2;
+    grant usage,operate,monitor,modify on warehouse smart_sync_<warehouse> to role smart_sync_rl;
+    ```
+1. Create the target (local) database, and grant the necessary permission to role smart_sync_rl. If you need to drop the local database, you may have to delete dependent objects. 
+    ```
+    use role smart_sync_rl;
+    drop share if exists <shared_database>_share;
+    drop database if exists <local db>;
+    use role AccountAdmin;
+    create database <local db> as replicat of <source region>.<source local database>;
+    grant ownerhsip on database <local db> to role smart_sync_rl;
+    ```
+1. Create the target (shared) database, and grant the necessary permission to role smart_sync_rl
+    ```
+    use role AccountAdmin;
+    drop database if exists <shared db>;
+    create database <shared db>;
+    grant all on database <shared db> to role smart_sync_rl with grant option;
+    use role smart_sync_rl;
+    create schema <shared db>.smart_sync_metadata;
+    ```
+1. Create the necessary tasks to run the steps on a regular schedule. The defaults below schedule the tasks to run every hour on the hour. Modify the schedule as needed. For consistency purposes, create the tasks in the shared database since hte local database is read only.     
+    ```
+    use role smart_sync_rl;
+    create or replace task <shared db>.smart_sync_metadata.<database refresh task>
+      WAREHOUSE = <warehouse>
+      SCHEDULE = 'USING CRON 0 * * * * US/Eastern'
+      USER_TASK_TIMEOUT_MS = 10800000
+      AS 
+        alter database <local db> refresh;
+
+    create or replace task <local db>.smart_sync_metadata.<refresh task>
+      WAREHOUSE = <warehouse>
+      USER_TASK_TIMEOUT_MS = 10800000
+      AFTER <local db>.smart_sync_metadata.<database refresh task>
+      AS 
+        call smart_sync_db.metadata.sp_sync('REFRESH',0,'<local db>','<shared db>');
+
+    
+    alter task  <shared db>.smart_sync_metadata.<refresh task> resume;
+    alter task  <shared db>.smart_sync_metadata.<database refresh task> resume; 
+    ```
+
+
