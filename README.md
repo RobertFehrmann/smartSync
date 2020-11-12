@@ -265,10 +265,10 @@ The following steps need to be executed for every database to be sync'd. Note: [
       AS 
         alter database <local db> refresh;
 
-    create or replace task <local db>.smart_sync_metadata.<refresh task>
+    create or replace task <shared db>.smart_sync_metadata.<refresh task>
       WAREHOUSE = <warehouse>
       USER_TASK_TIMEOUT_MS = 10800000
-      AFTER <local db>.smart_sync_metadata.<database refresh task>
+      AFTER <shared db>.smart_sync_metadata.<database refresh task>
       AS 
         call smart_sync_db.metadata.sp_sync('REFRESH',0,'<local db>','<shared db>');
 
