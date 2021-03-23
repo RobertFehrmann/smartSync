@@ -152,6 +152,7 @@ The following steps need to be executed for every database. Note: [Setup Steps](
     drop database if exists <local db>;
     create database <local db>;
     grant all on database <local db> to role smart_sync_rl with grant option;
+    grant ownership on schema <local db>.public to role smart_sync_rl with grant option;
     ```
 1. Create the target (shared) database, and grant the necessary permission to role smart_sync_rl
     ```
@@ -159,6 +160,7 @@ The following steps need to be executed for every database. Note: [Setup Steps](
     drop database if exists <target shared db>;
     create database <target shared db>;
     grant all on database <target shared db> to role smart_sync_rl with grant option;
+    grant ownership on schema <target shared db>.public to role smart_sync_rl with grant option;
     ```
 1. Create the source database from the share and grant the necessary permission to role smart_sync_rl
     ```
