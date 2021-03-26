@@ -246,7 +246,7 @@ The following steps need to be executed for every database to be sync'd. Note: [
     drop database if exists <local db>;
     use role AccountAdmin;
     create database <local db> as replica of <source region>.<source account>.<source local database>;
-    grant ownerhsip on database <local db> to role smart_sync_rl;
+    grant ownership on database <local db> to role smart_sync_rl;
     ```
 1. Create the target (shared) database, and grant the necessary permission to role smart_sync_rl
     ```
