@@ -42,6 +42,8 @@ $$
 //
 // 2020-08-01 Robert Fehrmann  
 //      Initial Version
+// 2021-05-19 Robert Fehrmann
+//      Fixed bug in compactor (missing tmp schema)
 // -----------------------------------------------------------------------------
 
 // copy parameters into local constant; none of the values can be modified
@@ -72,6 +74,7 @@ const internal = "SMART_SYNC";
 const meta_schema = internal + "_METADATA";
 const scheduler_tmp = internal + "_SCHEDULER_TMP";
 const refresh_tmp = internal + "_REFRESH_TMP";
+const compact_tmp = internal + "_COMPACT_TMP";
 const task_partitioned = "TASK_PARTITIONED";
 const task_partitioned_set = "TASK_PARTITIONED_SET"
 const object_sync_request = "OBJECT_SYNC_REQUEST";
@@ -1084,15 +1087,18 @@ function wait_for_worker_completion(process) {
 // Purpose     This function compacts all schemas to conly keep the number tables
 //             pass in as a parameter. 
 //             implemented methods.
+// Modifications 
+//             fixed bug caused by missing scheduler_tmp schema; added compact_tmp
 // Copyright (c) 2020 Snowflake Inc. All rights reserved
 // -----------------------------------------------------------------------------
 
 function compact(copies)
 {
    log("COMPACT")
+   snowflake.execute({sqlText: "CREATE OR REPLACE TRANSIENT SCHEMA \"" + tgt_db + "\".\"" + compact_tmp + "\";"});
 
     var sqlquery=`
-      CREATE OR REPLACE TABLE "` + tgt_db + `"."` + scheduler_tmp + `"."` + object_drop_request  + `" AS 
+      CREATE OR REPLACE TABLE "` + tgt_db + `"."` + compact_tmp + `"."` + object_drop_request  + `" AS 
          SELECT *
          FROM (
             (( -- all tables
@@ -1124,7 +1130,7 @@ function compact(copies)
    snowflake.execute({sqlText: sqlquery});
    var sqlquery=`
       SELECT table_name, curr_table_version, curr_schema_name
-      FROM "` + tgt_db + `"."` + scheduler_tmp + `"."` + object_drop_request  + `"
+      FROM "` + tgt_db + `"."` + compact_tmp + `"."` + object_drop_request  + `"
       `;
    var ResultSet = (snowflake.createStatement({sqlText:sqlquery})).execute();
    while (ResultSet.next())  {
@@ -1151,7 +1157,7 @@ function compact(copies)
             ,convert_timezone('`+timezone+`',current_timestamp()) create_ts 
             ,null fingerprint_check
       FROM "` + tgt_db + `".` + meta_schema + `.` + local_object_log +` l
-      INNER JOIN "` + tgt_db + `"."` + scheduler_tmp + `"."` + object_drop_request  + `" d
+      INNER JOIN "` + tgt_db + `"."` + compact_tmp + `"."` + object_drop_request  + `" d
          ON d.table_schema =l.table_schema AND d.table_name=l.table_name 
             AND d.curr_schema_name = l.curr_schema_name AND d.curr_table_version = l.curr_table_version
       WHERE l.action='`+action_create+`'
@@ -1203,6 +1209,8 @@ function compact(copies)
       snowflake.execute({sqlText: sqlquery});
       log("   DROP SCHEMA: " + schema_name );
    }
+                           
+   snowflake.execute({sqlText: "DROP SCHEMA \"" + tgt_db + "\".\"" + compact_tmp + "\";"});
 }
 
 // -----------------------------------------------------------------------------
